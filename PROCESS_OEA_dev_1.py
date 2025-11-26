@@ -8394,7 +8394,7 @@ if __name__ == '__main__':
         r_index_model = load_tflite_model("Model/rnn_model1_11_11_Unet.tflite")
         pt_index_model = load_tflite_model("Model/ecg_pt_detection_LSTMGRU_v32.tflite")
 
-        # -------------------- before -------------------------
+        # -------------- before --------------
         # binary_model = load_model('Model/12_09_25_2_model_epoch_24.h5', compile=False)
         # loss = tf.keras.losses.BinaryCrossentropy(from_logits=True)
         # #new_model.compile(optimizer='adam', loss=loss, metrics=['accuracy'])
