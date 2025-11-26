@@ -8413,8 +8413,6 @@ if __name__ == '__main__':
         model.to(DEVICE)
         model.eval()
 
-        # -------------------------------------------------------------------------------------------
-
         reader = easyocr.Reader(['en'], gpu=False)
         grid_model = tf.keras.models.load_model(r'Model/grid_detector_train_14_10_train.h5')
     while True:
