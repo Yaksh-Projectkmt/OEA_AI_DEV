@@ -62,7 +62,7 @@ from detectron2.config import get_cfg
 from detectron2.utils.visualizer import Visualizer
 from detectron2.structures import Instances, Boxes
 from detectron2.data.datasets import register_coco_instances
-import torch
+import torch,scipy
 import re
 import uuid
 import matplotlib
