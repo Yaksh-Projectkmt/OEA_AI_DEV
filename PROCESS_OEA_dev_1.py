@@ -3271,6 +3271,7 @@ def combine(ecg_signal, is_lead, class_name, r_id, fs=200, scale_factor=1): # , 
         s_index = s_index if len(s_index) > 0 else pqrst_data['S_Index']
         j_index = pqrst_data['J_Index']
         p_t = pqrst_data['P_T List']
+        hr_count_new = hr_count(r_index, class_name)
 
         if pace_label != 'False':
             temp_list = pacemaker_index
@@ -3281,7 +3282,7 @@ def combine(ecg_signal, is_lead, class_name, r_id, fs=200, scale_factor=1): # , 
                         temp_list.remove(val)
 
         pt = pqrst_data['PT PLot']
-        hr_counts = pqrst_data['HR_Count']
+        hr_counts = hr_count_new if hr_count_new != 0 else pqrst_data['HR_Count']
         t_index = t_peaks if t_peaks else pqrst_data['T_Index']
         p_index = p_peaks if p_peaks else pqrst_data['P_Index']
         ex_index = pqrst_data['Ex_Index']
