@@ -6333,7 +6333,7 @@ def image_crop_and_save(image_path, class_name, output_folder):
                 # Newly added precise ranges
                 (96.4, 96.6),
                 (115.4, 115.8),
-                (85.2, 86.0),
+                (85.2, 86.4),
                 (99.65, 99.75),
                 (122.0, 122.5),
                 (248.2, 248.3),
@@ -8380,15 +8380,15 @@ def another_call():
 if __name__ == '__main__':
 
     with tf.device('/cpu:0'):
-        interpreter = tf.lite.Interpreter(model_path="Model/PVC_Trans_mob_84_test_tiny_iter1_OEA_minimal.tflite")
+        interpreter = tf.lite.Interpreter(model_path="Model/PVC_Trans_mob_lightweight_v3_optimized.tflite")
         interpreter.allocate_tensors()
 
         input_details = interpreter.get_input_details()
         output_details = interpreter.get_output_details()
-        pac_model = load_tflite_model("Model/PAC_TRANS_GRU_mob_47_OEA_Minimal.tflite")
+        pac_model = load_tflite_model("Model/PAC_Trans_mob_lightweight_v3_optimized.tflite")
         afib_model = load_tflite_model("Model/oea_afib_flutter_26_6.tflite")
         vfib_model = load_tflite_model("Model/VFIB_Model_07JUN2024_1038.tflite")
-        block_model = load_tflite_model("Model/Block_Trans_mob_29_super_new_minimal.tflite")
+        block_model = load_tflite_model("Model/Block_Trans_mob_lightweight_v2_optimized.tflite")
         noise_model = load_tflite_model('Model/NOISE_20_GPT.tflite')
         let_inf_moedel = load_tflite_model("Model/MI_21_11_25_oea.tflite")
         r_index_model = load_tflite_model("Model/rnn_model1_11_11_Unet.tflite")
