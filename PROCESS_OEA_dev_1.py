@@ -5032,13 +5032,13 @@ def process_and_plot_leads(ecg_df, img_id, file_name, result, top_label, class_n
         ax.set_aspect('equal')
         ax.axis('off')
         for x in np.arange(0, width_mm + 1, 1):
-            ax.axvline(x=x, color='#B3E0FF', linewidth=0.15)
+            ax.axvline(x=x, color='#6096bd', linewidth=0.15)
         for y in np.arange(0, height_mm + 1, 1):
-            ax.axhline(y=y, color='#B3E0FF', linewidth=0.15)
+            ax.axhline(y=y, color='#6096bd', linewidth=0.15)
         for x in np.arange(0, width_mm + 1, 5):
-            ax.axvline(x=x, color='#0057B7', linewidth=0.2)
+            ax.axvline(x=x, color='#004b9e', linewidth=0.2)
         for y in np.arange(0, height_mm + 1, 5):
-            ax.axhline(y=y, color='#0057B7', linewidth=0.2)
+            ax.axhline(y=y, color='#004b9e', linewidth=0.2)
 
     draw_ecg_grid(ax, fig_width_mm, fig_height_mm)
 
