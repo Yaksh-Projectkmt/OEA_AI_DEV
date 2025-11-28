@@ -64,7 +64,7 @@ from detectron2.config import get_cfg
 from detectron2.utils.visualizer import Visualizer
 from detectron2.structures import Instances, Boxes
 from detectron2.data.datasets import register_coco_instances
-import torch
+import torch,scipy
 import re
 import uuid
 import matplotlib
@@ -3284,7 +3284,11 @@ def combine(ecg_signal, is_lead, class_name, r_id, fs=200, scale_factor=1): # , 
                         temp_list.remove(val)
 
         pt = pqrst_data['PT PLot']
+<<<<<<< HEAD
         hr_counts = hr_count_new if hr_count_new !=0 else pqrst_data['HR_Count']
+=======
+        hr_counts = hr_count_new if hr_count_new != 0 else pqrst_data['HR_Count']
+>>>>>>> 97ad0e829c7e14d20937ece36f9c935e64020d37
         t_index = t_peaks if t_peaks else pqrst_data['T_Index']
         p_index = p_peaks if p_peaks else pqrst_data['P_Index']
         ex_index = pqrst_data['Ex_Index']
@@ -6133,7 +6137,7 @@ def ensure_min_image_size(image_path: str,output_folder, min_size: int = 1000) -
             print(f"[?] Image already meets size requirements: {width}x{height}")
             return image_path, 1, image_path, original_scale_factor
 
-        # Otherwise upscale 2× (as in your original logic)
+        # Otherwise upscale 2ï¿½ (as in your original logic)
         scale_factor = 2
         new_size = (width * scale_factor, height * scale_factor)
 
@@ -6314,8 +6318,8 @@ def image_crop_and_save(image_path, class_name, output_folder):
                 (410 <= col1_x1 <= 415) or
                 (39.5 <= col1_x1 <= 40) or
                 (48 <= col1_x1 <= 80) or          # expanded for 78.31
-                (84 <= col1_x1 <= 110) or         # expanded for 85–103
-                (109 <= col1_x1 <= 125) or        # expanded for 110–122
+                (84 <= col1_x1 <= 110) or         # expanded for 85ï¿½103
+                (109 <= col1_x1 <= 125) or        # expanded for 110ï¿½122
                 (129 <= col1_x1 <= 139) or
                 (142 <= col1_x1 <= 200) or        # includes 142.95
                 (218 <= col1_x1 <= 250) or
@@ -6336,7 +6340,7 @@ def image_crop_and_save(image_path, class_name, output_folder):
                 # Newly added precise ranges
                 (96.4, 96.6),
                 (115.4, 115.8),
-                (85.2, 86.0),
+                (85.2, 86.4),
                 (99.65, 99.75),
                 (122.0, 122.5),
                 (248.2, 248.3),
@@ -8415,8 +8419,6 @@ if __name__ == '__main__':
         model.load_state_dict(torch.load(r'Model/binary_model_epoch_45_19_11.pth', map_location=DEVICE))
         model.to(DEVICE)
         model.eval()
-
-        # -------------------------------------------------------------------------------------------
 
         reader = easyocr.Reader(['en'], gpu=False)
         grid_model = tf.keras.models.load_model(r'Model/grid_detector_train_14_10_train.h5')
