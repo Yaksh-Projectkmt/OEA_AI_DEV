@@ -1,4 +1,7 @@
 # -*- coding: utf-8 -*-
+import os
+os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
+
 import base64
 import math
 import gc
@@ -14,9 +17,8 @@ import pandas as pd
 from sklearn.cluster import KMeans
 import matplotlib.ticker as ticker
 import numpy as np
-import os
+
 from scipy.stats import mode
-os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
 import tensorflow as tf
 from keras.models import load_model
 from segmentation_models import get_preprocessing
@@ -2929,9 +2931,9 @@ class PAC_detedction:
             svt_counter = 0
 
         data = {"PAC-Isolated_counter": Isolated,
-                "PAC-Bigem_counter": bigeminy_counter,
-                "PAC-Trigem_counter": trigeminy_counter,
-                "PAC-Quadrigem_counter": quadrigeminy_counter,
+                "PAC-Bigeminy_counter": bigeminy_counter,
+                "PAC-Trigeminy_counter": trigeminy_counter,
+                "PAC-Quadrigeminy_counter": quadrigeminy_counter,
                 "PAC-Couplet_counter": couplet_counter,
                 "PAC-Triplet_counter": triplet_counter,
                 "SVT_counter": svt_counter}  # svt_counter
@@ -3271,6 +3273,7 @@ def combine(ecg_signal, is_lead, class_name, r_id, fs=200, scale_factor=1): # , 
         s_index = s_index if len(s_index) > 0 else pqrst_data['S_Index']
         j_index = pqrst_data['J_Index']
         p_t = pqrst_data['P_T List']
+        hr_count_new = hr_count(r_index, class_name)
 
         if pace_label != 'False':
             temp_list = pacemaker_index
@@ -3281,7 +3284,11 @@ def combine(ecg_signal, is_lead, class_name, r_id, fs=200, scale_factor=1): # , 
                         temp_list.remove(val)
 
         pt = pqrst_data['PT PLot']
-        hr_counts = pqrst_data['HR_Count']
+<<<<<<< HEAD
+        hr_counts = hr_count_new if hr_count_new !=0 else pqrst_data['HR_Count']
+=======
+        hr_counts = hr_count_new if hr_count_new != 0 else pqrst_data['HR_Count']
+>>>>>>> 97ad0e829c7e14d20937ece36f9c935e64020d37
         t_index = t_peaks if t_peaks else pqrst_data['T_Index']
         p_index = p_peaks if p_peaks else pqrst_data['P_Index']
         ex_index = pqrst_data['Ex_Index']
@@ -5031,13 +5038,13 @@ def process_and_plot_leads(ecg_df, img_id, file_name, result, top_label, class_n
         ax.set_aspect('equal')
         ax.axis('off')
         for x in np.arange(0, width_mm + 1, 1):
-            ax.axvline(x=x, color='#B3E0FF', linewidth=0.15)
+            ax.axvline(x=x, color='#6096bd', linewidth=0.15)
         for y in np.arange(0, height_mm + 1, 1):
-            ax.axhline(y=y, color='#B3E0FF', linewidth=0.15)
+            ax.axhline(y=y, color='#6096bd', linewidth=0.15)
         for x in np.arange(0, width_mm + 1, 5):
-            ax.axvline(x=x, color='#0057B7', linewidth=0.2)
+            ax.axvline(x=x, color='#004b9e', linewidth=0.2)
         for y in np.arange(0, height_mm + 1, 5):
-            ax.axhline(y=y, color='#0057B7', linewidth=0.2)
+            ax.axhline(y=y, color='#004b9e', linewidth=0.2)
 
     draw_ecg_grid(ax, fig_width_mm, fig_height_mm)
 
@@ -7423,15 +7430,15 @@ def plot_and_save_ecg_pixel_based(df, file_name, img_id, layout='3x4', top_label
     # Draw ECG grid
     for x in range(0, final_width_adjusted+1, spacing):
         if x % (spacing * 5) == 0:
-            ax.axvline(x, color='#0057B7', linewidth=0.5)
+            ax.axvline(x, color='#004b9e', linewidth=0.5)
         else:
-            ax.axvline(x, color='#B3E0FF', linewidth=0.25)
+            ax.axvline(x, color='#6096bd', linewidth=0.25)
 
     for y in range(0, int(ymax + margin) + 1, spacing):
         if y % (spacing * 5) == 0:
-            ax.axhline(y, color='#0057B7', linewidth=0.5)
+            ax.axhline(y, color='#004b9e', linewidth=0.5)
         else:
-            ax.axhline(y, color='#B3E0FF', linewidth=0.25)  
+            ax.axhline(y, color='#6096bd', linewidth=0.25)  
 
 
 
