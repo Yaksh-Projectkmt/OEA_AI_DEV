@@ -4855,41 +4855,6 @@ def check_noise(all_leads_data, class_name, fs):
     print(f"Final noise result: {final_result} (ARTIFACT count: {noise_cou})")
     return final_result
 
-
-# def convert_to_jpeg(input_path):
-#    """
-#    Converts any image to JPEG format and overwrites the original image.
-#
-#    Parameters:
-#    - input_path: str - Path to the input image file.
-#    """
-#    try:
-#        # Open the image
-#        with Image.open(input_path) as img:
-#            # Convert to RGB to ensure JPEG compatibility
-#            if img.mode in ("RGBA", "P"):
-#                img = img.convert("RGB")
-#
-#            # Generate new JPEG path
-#            base, _ = os.path.splitext(input_path)
-#            jpeg_path = f"{base}.jpg"
-#
-#            # Save as JPEG (overwrite if same name or delete original if needed)
-#            img.save(jpeg_path, "JPEG")
-#            print(f"Image converted and saved as: {jpeg_path}")
-#
-#            # Delete original file if it had a different extension
-#            if jpeg_path != input_path:
-#                os.remove(input_path)
-#                print(f"Original file '{input_path}' removed.")
-#
-#            return jpeg_path
-#
-#    except Exception as e:
-#        print(f"Failed to convert image: {e}")
-#    return input_path
-
-
 import pillow_avif
 
 
