@@ -62,7 +62,7 @@ from detectron2.config import get_cfg
 from detectron2.utils.visualizer import Visualizer
 from detectron2.structures import Instances, Boxes
 from detectron2.data.datasets import register_coco_instances
-import torch,scipy
+import torch
 import re
 import uuid
 import matplotlib
@@ -7280,7 +7280,7 @@ def plot_and_save_ecg_pixel_based(df, file_name, img_id, layout='3x4', top_label
         # # Plot main ECG waveform with breaks for NaN values
         # plot_runs(ax, x + x_offset, y_signal[:len(x)], col="black", y_jump_thresh=100)
 
-        if layout == '6x2' and (width > 3000 or height > 3000):
+        if layout == '6x2' and (width > 2300 or height > 2300):
             y_jump_thresh = 1000
             plot_runs(ax, x + x_offset, y_signal[:len(x)], col="black", y_jump_thresh=y_jump_thresh)
         else:
