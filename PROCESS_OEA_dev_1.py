@@ -5,7 +5,6 @@ os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
 import base64
 import math
 import gc
-import os
 import json
 import time
 import random
@@ -14,38 +13,29 @@ from itertools import groupby
 from operator import itemgetter
 from pathlib import Path
 import pandas as pd
-from sklearn.cluster import KMeans
-import matplotlib.ticker as ticker
 import numpy as np
-
 from scipy.stats import mode
 import tensorflow as tf
 from keras.models import load_model
-from segmentation_models import get_preprocessing
 tf.config.set_visible_devices([], 'GPU')
 import shutil
-import easyocr
 from scipy.ndimage import gaussian_filter1d
 from scipy.interpolate import interp1d
 import redis
-from matplotlib.gridspec import GridSpec
-from skimage import io, color
+from skimage import color
 from skimage.transform import rotate, hough_line, hough_line_peaks
 from sklearn.discriminant_analysis import LinearDiscriminantAnalysis
-from dataclasses import dataclass
-from typing import Iterable, List
-redis_client = redis.StrictRedis(host='localhost', port=6379, db=0, decode_responses=True)
+from typing import Iterable
 import segmentation_models_pytorch as smp
 from scipy import signal
 from scipy import sparse
 from numpy import trapz
 from scipy.sparse.linalg import spsolve
-from scipy.signal import (find_peaks, firwin, medfilt, butter, filtfilt, argrelextrema,  welch, resample, savgol_filter)
+from scipy.signal import (find_peaks, firwin, medfilt, butter, filtfilt, argrelextrema, savgol_filter)
 import pywt
 from sklearn.preprocessing import MinMaxScaler
 import matplotlib.pyplot as plt
 from matplotlib import colormaps
-from scipy.interpolate import interp1d
 import glob
 import tools as st
 import utils
@@ -55,41 +45,34 @@ import warnings
 import threading
 from biosppy.signals import ecg as hami
 import scipy
-import os
 from PIL import Image, ExifTags
 from collections import Counter
 from detectron2.data import MetadataCatalog
 from detectron2.engine import DefaultPredictor
 from detectron2.config import get_cfg
-from detectron2.utils.visualizer import Visualizer
 from detectron2.structures import Instances, Boxes
-from detectron2.data.datasets import register_coco_instances
 import torch
 import re
 import uuid
 import matplotlib
-import multiprocessing
 from sklearn.decomposition import PCA
 from scipy.spatial import cKDTree
 from tqdm import tqdm
-from scipy.interpolate import griddata
 from pymongo import MongoClient
 from datetime import datetime
+from collections import namedtuple
+
 
 matplotlib.use('Agg')
 warnings.filterwarnings('ignore')
-results_lock = threading.RLock()
+
+redis_client = redis.StrictRedis(host='localhost', port=6379, db=0, decode_responses=True)
 
 user_workers = {}
+results_lock = threading.RLock()
 user_workers_lock = threading.Lock()
 
-def ensure_worker(user_id):
-    with user_workers_lock:
-        if user_id not in user_workers or not user_workers[user_id].is_alive():
-            worker = multiprocessing.Process(target=process_user_queue, args=(user_id,), daemon=True)
-            user_workers[user_id] = worker
-            worker.start()
-            print(f"Started worker for user {user_id}")
+
 
 def load_tflite_model(model_path):
     interpreter = tf.lite.Interpreter(model_path=model_path)
@@ -99,7 +82,7 @@ def load_tflite_model(model_path):
     return interpreter, input_details, output_details
 
 
-img_interpreter, img_input_details, img_output_details = load_tflite_model("Model/restingecgModel_autoGrid_26.tflite")
+img_interpreter, img_input_details, img_output_details = load_tflite_model("Model/restingecgModel_autoGrid_28.tflite")
 
 # For grid in lead detection
 Lead_list = ["I", "II", "III", "V1", "V2", "V3", "V4", "V5", "V6", "aVF", "aVL", "aVR"]
@@ -141,8 +124,7 @@ def force_remove_folder(folder_path):
     """Forcefully remove a folder, even if files are read-only."""
 
     def onerror(func, path, exc_info):
-        # Change the permission and retry
-        os.chmod(path, 0o777)  # Grant full permissions
+        os.chmod(path, 0o777) 
         func(path)
 
     shutil.rmtree(folder_path, onerror=onerror)
@@ -165,15 +147,12 @@ class NoiseDetection:
             return classes[idx]
 
     def plot_to_imagearray(self, ecg_signal):
-        # Ensure ecg_signal is a 1D array
         ecg_signal = np.asarray(ecg_signal).ravel()
 
-        # Create the plot
         fig, ax = plt.subplots(num=1, clear=True)
-        ax.plot(ecg_signal, color='black')  # Plot the flattened array
-        ax.axis(False)  # Hide axes
+        ax.plot(ecg_signal, color='black')
+        ax.axis(False)
 
-        # Convert plot to image array
         fig.canvas.draw()
         data = np.frombuffer(fig.canvas.tostring_rgb(), dtype=np.uint8)
         data = data.reshape(fig.canvas.get_width_height()[::-1] + (3,))
@@ -182,7 +161,6 @@ class NoiseDetection:
         return data[:, :, ::-1]
 
     def noise_model_check(self):
-        # Noise detection logic for individual lead
         if self.class_name == '12_1':
             steps_data = int(self.frequency * 5)
         else:
@@ -201,30 +179,20 @@ class NoiseDetection:
                 img_data = pd.DataFrame(self.raw_data[-steps_data:total_data])
             end_data = total_data - 1
 
-            # Assuming the noise detection model uses image input
             data1 = self.plot_to_imagearray(img_data)
 
-            # Get noise model result for the image
             model_result = self.prediction_model(data1)
             percentage['total_slice'] += 1
             if model_result == 'Normal':
                 normal_index.append((start_data, end_data))
-                #                percentage['Normal'] += (end_data - start_data) / total_data
                 percentage['Normal'] += 1
             else:
                 noise_index.append((start_data, end_data))
-                # percentage['Noise'] += (end_data - start_data) / total_data
                 percentage['Noise'] += 1
 
             start_data += steps_data
 
-        # If the percentage of noise is high, return 'ARTIFACTS'
         noise_label = 'Normal'
-
-        #        if int(percentage['Noise'] * 100) >= 60:
-        #            noise_label = 'ARTIFACTS'
-        # print(percentage,"====================")
-
         if percentage['total_slice'] != 0:
             if percentage['Noise'] == percentage['total_slice']:
                 noise_label = 'ARTIFACTS'
@@ -306,7 +274,6 @@ def check_model_r(ecg_data):
     return r_peaks
 
 def find_r_index(ecg_signal):
-
     nan_indices = np.where(np.isnan(ecg_signal))[0]
     clean_signal = ecg_signal[~np.isnan(ecg_signal)]
 
@@ -639,8 +606,6 @@ def get_pt_peaks(ecg, r_indices):
 
     return t_peaks_all, p_peaks_all, pt_peaks_all , onset, offset
 
-
-
 def find_pt_index(ecg_signal, r_index):
     t_peaks, p_peaks, pt_peaks, onset, offset = [], [], [], [], []
     nan_indices = np.where(np.isnan(ecg_signal))[0]
@@ -677,11 +642,8 @@ class pqrst_detection:
         self.class_name = class_name
 
     def hamilton_segmenter(self):
-
-        # check inputs
         if self.ecg_signal is None:
             print("Please specify an input signal.")
-        ##            raise TypeError("Please specify an input signal.")
 
         sampling_rate = float(self.fs)
         length = len(self.ecg_signal)
@@ -1467,7 +1429,6 @@ class pqrst_detection:
         """
         diff_arr = ((np.diff(self.r_index) * self.thres) / self.fs).tolist()
         t_peaks_list, p_peaks_list, pr_interval, extra_peaks_list = [], [], [], []
-        # threshold = (-0.0012 * len(r_index)) + 0.25
         for i in range(len(self.p_t)):
             p_dis = (self.r_index[i + 1] - self.p_t[i][-1]) / self.fs
             t_dis = (self.r_index[i + 1] - self.p_t[i][0]) / self.fs
@@ -1529,11 +1490,9 @@ class pqrst_detection:
                 peaks = np.array([])
             if peaks.any():
                 t_index.extend(list(peaks))
-        # t_label =
         return t_index
 
     def get_data(self):
-
         self.r_index = self.find_r_peaks()
         rr_intervals = np.diff(self.r_index)
         rr_std = np.std(rr_intervals)
@@ -1653,7 +1612,6 @@ class filter_signal:
         else:
             self.baseline_signal = self.baseline_construction_200(kernel_size=101)
             lowpass_signal = self.lowpass(cutoff=0.5)
-            # raise ValueError(f"Unsupported sampling frequency: {self.fs}")
 
         return self.baseline_signal, lowpass_signal
 
@@ -1755,18 +1713,16 @@ class PVC_detection:
                     above_r_peaks.append(idx)
                 else:
                     below_r_peaks.append(idx)
-        # if self.hr_count <= 88:
-        #     thresold = round(self.fs * 0.08)  # 0.10
-        # else:
-        thresold = round(self.fs * 0.12)  # 0.12
+
+        thresold = round(self.fs * 0.12)
         for k in range(len(self.r_index)):
             diff = self.s_index[k] - self.q_index[k]
             if self.r_index[k] in above_r_peaks:
-                surface_thres = 0.02  # 0.14 #for OEA=0.02
-                wideqs_thres = 0.01  # 0.13 #for OEA=0.01
+                surface_thres = 0.02  
+                wideqs_thres = 0.01 
             elif self.r_index[k] in below_r_peaks:
-                surface_thres = 0.02  # for OEA=0.02
-                wideqs_thres = 0.02  # for OEA=0.02
+                surface_thres = 0.02  
+                wideqs_thres = 0.02 
             if diff > thresold:
                 difference.append(diff)
                 wideQRS.append(self.r_index[k])
@@ -1778,7 +1734,7 @@ class PVC_detection:
                         pvc.append(self.r_index[k])
 
         if len(difference) != 0:
-            q_s_difference = [i / 100 for i in difference]  # 200
+            q_s_difference = [i / 100 for i in difference] 
         else:
             q_s_difference = np.array([])
         return np.array(wideQRS), q_s_difference, pvc
@@ -1890,9 +1846,7 @@ class PVC_detection:
         mod_pre_lbb, mod_pre_rbbb = [], []
         model_pred = []
         counter = 0
-        #        detect_rpeaks = self.detect_beats(e_signal, float(self.fs))
         detect_rpeaks = r_index
-        # print('r_count',detect_rpeaks)
         try:
             if not os.path.exists(f'temp_pvc_img/' + self.r_id):
                 os.mkdir('temp_pvc_img/' + self.r_id)
@@ -1909,16 +1863,15 @@ class PVC_detection:
             plt.axis("off")
             plt.savefig(f"temp_pvc_img/{self.r_id}/{r}.jpg")
             aq = cv2.imread(f"temp_pvc_img/{self.r_id}/{r}.jpg")
-            aq = cv2.resize(aq, (360, 720))  # (180,420)
+            aq = cv2.resize(aq, (360, 720)) 
             cv2.imwrite(f"temp_pvc_img/{self.r_id}/{r}.jpg", aq)
             plt.close()
 
         files = sorted(glob.glob(f"temp_pvc_img/{self.r_id}/*.jpg"), key=len)
         for p_files in files:
             predictions, model_label = self.prediction_model(p_files)
-            # print(predictions, model_label)
             r_peak = int(p_files.split("/")[-1].split(".")[0])
-            if str(model_label) == 'PVC' and float(predictions[3]) > 0.78:  # 0.75
+            if str(model_label) == 'PVC' and float(predictions[3]) > 0.78:
                 pvc_0.append(r_peak)
                 model_pred.append(int(float(predictions[3]) * 100))
             if str(model_label) == 'LBBB' and float(predictions[0]) > 0.78:
@@ -1933,22 +1886,18 @@ class PVC_detection:
         return pvc_0, lbbb, rbbb, mod_pre_lbb, mod_pre_rbbb, model_pred, detect_rpeaks
 
     def get_pvc_data(self):
-        self.baseline_signal = self.baseline_construction_200(kernel_size=131)  # 101
+        self.baseline_signal = self.baseline_construction_200(kernel_size=131)
         self.low_pass_signal = self.lowpass(self.baseline_signal)
         lbbb_rbbb_label = "Abnormal"
         pqrst_data = pqrst_detection(self.baseline_signal, fs=self.fs).get_data()
-        # self.r_index = pqrst_data['R_index']
-        # self.q_index = pqrst_data['Q_Index']
-        # self.s_index = pqrst_data['S_Index']
         self.hr_count = pqrst_data['HR_Count']
         self.p_t = pqrst_data['P_T List']
         self.ex_index = pqrst_data['Ex_Index']
         wide_qrs, q_s_difference, surface_index = self.wide_qrs_find()
-        # wide_qrs = np.array([])
         model_pred = model_pvc = []
         lbbb_index, rbbb_index = [], []
 
-        pvc_onehot = np.zeros(len(self.r_index)).tolist()  # r_index
+        pvc_onehot = np.zeros(len(self.r_index)).tolist()
         lbbb_rbbb_per = 0
         if len(wide_qrs) > 0:
             if self.fs == 200:
@@ -2059,14 +2008,8 @@ class BlockDetected:
                     if self.pr[i] > self.pr[i - 1]:
                         inc_dec_count += 1
                 if len(self.pr) != 0:
-                    if round(inc_dec_count / (len(self.pr)), 2) >= 0.50:  # if posibale to change more then 0.5
+                    if round(inc_dec_count / (len(self.pr)), 2) >= 0.50:
                         possible_mob_3rd = True
-                # if cons_2_1 == False:
-                #     for i in range(0, len(self.pr)):
-                #         if self.pr[i] > self.pr[i-1]:
-                #             count += 1
-                #     if round(count/len(self.pr), 2) >= 0.5:
-                #         possible_3rd = True
                 for inner_list in self.p_t:
                     if len(inner_list) in [3, 4]:
                         ampli_val = [self.baseline_signal[i] for i in inner_list]
@@ -2086,7 +2029,7 @@ class BlockDetected:
                     else:
                         third_degree.append(0)
         if len(third_degree) != 0:
-            if third_degree.count(1) / len(third_degree) >= 0.4 or possible_mob_3rd:  # 0.5 0.4
+            if third_degree.count(1) / len(third_degree) >= 0.4 or possible_mob_3rd:
                 label = "3rd Degree block"
         return label
 
@@ -2151,7 +2094,7 @@ class BlockDetected:
                                 constant_3_peak.append(0)
         if len(constant_3_peak) != 0 and constant_3_peak.count(1) != 0:
 
-            if constant_3_peak.count(1) / len(constant_3_peak) >= 0.4:  # 0.4 0.5
+            if constant_3_peak.count(1) / len(constant_3_peak) >= 0.4:
                 label = "Mobitz_II"
         elif possible_mob_1 and mob_count > 1:  # 0 1 4
             label = "Mobitz_I"
@@ -2167,7 +2110,6 @@ class BlockDetected:
             input_arr = tf.image.resize(input_arr, size=(224, 224), method=tf.image.ResizeMethod.BILINEAR)
             input_arr = (tf.expand_dims(input_arr, axis=0),)
             model_pred = predict_tflite_model(block_model, input_arr)[0]
-            # print(model_pred)
             idx = np.argmax(model_pred)
             return model_pred, classes[idx]
 
@@ -2178,7 +2120,6 @@ class BlockDetected:
 
         randome_number = random.randint(200000, 1000000)
         temp_img = low_ecg_signal
-        #        plt.figure(layout="constrained")
         plt.figure()
         plt.plot(temp_img)
         plt.axis("off")
@@ -2186,15 +2127,13 @@ class BlockDetected:
         aq = cv2.imread(f"temp_block_img/p_{randome_number}.jpg")
         aq = cv2.resize(aq, (2400, 360), interpolation=cv2.INTER_LANCZOS4)
         aq = Image.fromarray(cv2.cvtColor(aq, cv2.COLOR_BGR2RGB))
-        #        cv2.imwrite(f"temp_block_img/p_{randome_number}.jpg", aq)
         aq.save(f"temp_block_img/p_{randome_number}.jpg", dpi=(2000, 700))
         plt.close()
         ei_ti_label = []
         files = sorted(glob.glob("temp_block_img/*.jpg"), key=extract_number)
         for pvcfilename in files:
             predictions, ids = self.prediction_model_block(pvcfilename)
-            # print(predictions, ids)
-            label = "Abnormal"  # "Normal"
+            label = "Abnormal"
             if str(ids) == "3rd_deg" and float(predictions[2]) > 0.80:
                 label = "3rd degree"
             if str(ids) == "2nd_deg" and float(predictions[1]) > 0.80:
@@ -2257,8 +2196,8 @@ def block_model_check(ecg_signal, frequency, abs_result):
 
 def remove_temp_folder(folder_path):
     def on_rm_error(func, path, exc_info):
-        os.chmod(path, 0o777)  # Change permission
-        func(path)  # Retry deleting
+        os.chmod(path, 0o777) 
+        func(path)
 
     if os.path.exists(folder_path):
         shutil.rmtree(folder_path, onerror=on_rm_error)
@@ -2338,8 +2277,7 @@ def vfib_model_pred_tfite(raw_signal, model, fs):
             rs_raw = resampled_ecg_data(_raw_s_, fs, 500 / seconds)
             if rs_raw.shape[0] != 500:
                 rs_raw = signal.resample(rs_raw, 500)
-            image_data = (tf.expand_dims(raw, axis=0),)  # tf.constant(rs_raw.reshape(1, -1, 1).astype(np.float32)))
-            # image_data = (tf.cast(image_data[0],dtype=tf.float32), )
+            image_data = (tf.expand_dims(raw, axis=0),)  
             model_pred = vfib_predict_tflite_model(model, image_data)[0]
             label = np.argmax(model_pred)
             model_prediction.append(f'{(start, end)}={model_pred}')
@@ -2403,7 +2341,7 @@ def check_vfib_vfl_model(ecg_signal, vfib_vfl_model):
         with tf.device("cpu"):
             predictions, ids = prediction_model_vfib_vfl(vfib_file, vfib_vfl_model)
         print(predictions, ids)
-        label = "Abnormal"  # "Normal"
+        label = "Abnormal"
         if str(ids) == "VFIB" and float(predictions[0]) > 0.75:
             label = "VFIB/Vflutter"
             combine_result.append(label)
@@ -2485,7 +2423,6 @@ def pacemake_detect(ecg_signal, fs=200):
         if peaks1.any():
             a_pacemaker.extend(list(peaks1))
 
-    # Remove a_pacemaker if it falls within 20 data points of a v_pacemaker or Atrial_&_Ventricular_pacemaker
     for v_peak in v_pacemaker:
         for k in range(len(a_pacemaker) - 1, -1, -1):
             if abs(a_pacemaker[k] - v_peak) <= 20:
@@ -2526,7 +2463,6 @@ def image_array_new(signal, scale=25):
     '''
     scales = np.arange(1, scale, 1)
     coef, freqs = pywt.cwt(signal, scales, 'gaus6')
-    # coef, freqs = pywt.cwt(signal, scales, wavelet_name)
     abs_coef = np.abs(coef)
     y_scale = abs_coef.shape[0] / 224
     x_scale = abs_coef.shape[1] / 224
@@ -2562,7 +2498,6 @@ class afib_flutter_detection:
     def image_array_new(self, signal, scale=25):
         scales = np.arange(1, scale, 1)
         coef, freqs = pywt.cwt(signal, scales, 'gaus6')
-        # coef, freqs = pywt.cwt(signal, scales, wavelet_name)
         abs_coef = np.abs(coef)
         y_scale = abs_coef.shape[0] / 224
         x_scale = abs_coef.shape[1] / 224
@@ -2656,42 +2591,18 @@ class afib_flutter_detection:
                 percent['total_slice'] += 1
                 if model_idx == 0:
                     percent['ABNORMAL'] += 1
-#                    if last_s and s > last_s[0]:
-#                        percent['ABNORMAL'] += last_s[1] / total_data
-#                    else:
-#                        percent['ABNORMAL'] += 4 / total_data
                 elif model_idx == 1:
                     percent['AFIB'] += 1
                     afib_data_index.append((q, s))
                     afib_predictions.append(int(float(model_pred[1])*100))
-#                    if last_s and s > last_s[0]:
-#                        percent['AFIB'] += last_s[1] / total_data
-#                        afib_data_index.append((last_q, s))
-#                    else:
-#                        percent['AFIB'] += 4 / total_data
-#                        afib_data_index.append((q, s))
                 elif model_idx == 2:
                     percent['FLUTTER'] += 1
                     flutter_data_index.append((q, s))
                     flutter_predictions.append(int(float(model_pred[2])*100))
-#                    if last_s and s > last_s[0]:
-#                        percent['FLUTTER'] += last_s[1] / total_data
-#                        flutter_data_index.append((last_q, s))
-#                    else:
-#                        percent['FLUTTER'] += 4 / total_data
-#                        flutter_data_index.append((q, s))
                 elif model_idx == 3:
                     percent['NOISE'] += 1
-#                    if last_s and s > last_s[0]:
-#                        percent['NOISE'] += last_s[1] / total_data
-#                    else:
-#                        percent['NOISE'] += 4 / total_data
                 elif model_idx == 4:
                     percent['NORMAL'] += 1
-#                    if last_s and s > last_s[0]:
-#                        percent['NORMAL'] += last_s[1] / total_data
-#                    else:
-#                        percent['NORMAL'] += 4 / total_data
         return percent, afib_data_index, flutter_data_index, afib_predictions, flutter_predictions
 
     def get_data(self):
@@ -2737,18 +2648,16 @@ def wide_qrs(q_index, r_index, s_index, hr, fs=100):
     label = 'Abnormal'
     wideQRS = []
     recheck_wide_qrs = []
-    # if hr <= 88:
-    #     thresold = round(fs * 0.10)
-    # else:
-    thresold = round(fs * 0.12)  # 0.10
+
+    thresold = round(fs * 0.12)
     if len(r_index) != 0:
 
         for k in range(len(r_index)):
             diff = s_index[k] - q_index[k]
             if diff > thresold:
                 wideQRS.append(r_index[k])
-        if len(wideQRS) / len(r_index) >= 0.90:  # .50
-            final_thresh = round(fs * 0.20)  # 0.18
+        if len(wideQRS) / len(r_index) >= 0.90:
+            final_thresh = round(fs * 0.20)
             for k in range(len(r_index)):
                 if diff > final_thresh:
                     recheck_wide_qrs.append(r_index[k])
@@ -2760,9 +2669,9 @@ def wide_qrs(q_index, r_index, s_index, hr, fs=100):
 def wide_qrs_find_pac(q_index, r_index, s_index, hr_count, fs=200):
     max_indexs = 0
     if hr_count <= 88:
-        ms = 0.18  # 0.10
+        ms = 0.18
     else:
-        ms = 0.16  # 0.12
+        ms = 0.16
     max_indexs = int(fs * ms)
     pvc = []
     difference = []
@@ -2925,7 +2834,7 @@ class PAC_detedction:
         if hr_counts > 100:
             if svt_counter != 0:
                 triplet_counter = couplet_counter = quadrigeminy_counter = trigeminy_counter = bigeminy_counter = Isolated = 0
-        if svt_counter >= 1 and hr_counts > 100:  # 190
+        if svt_counter >= 1 and hr_counts > 100: 
             svt_counter = 1
         else:
             svt_counter = 0
@@ -2936,7 +2845,7 @@ class PAC_detedction:
                 "PAC-Quadrigeminy_counter": quadrigeminy_counter,
                 "PAC-Couplet_counter": couplet_counter,
                 "PAC-Triplet_counter": triplet_counter,
-                "SVT_counter": svt_counter}  # svt_counter
+                "SVT_counter": svt_counter}
         return data
 
     def predict_pac_model(self, input_arr, target_shape=[224, 224], class_name=True):
@@ -2944,8 +2853,6 @@ class PAC_detedction:
             classes = ['Abnormal', 'Junctional', 'Normal', 'PAC']
             input_arr = tf.keras.preprocessing.image.img_to_array(input_arr)
             input_arr = tf.convert_to_tensor(input_arr, dtype=tf.float32)
-            # input_arr = tf.cast(input_arr, dtype=tf.float32)
-            # input_arr = tf.convert_to_tensor(input_arr, dtype=tf.float32)
             input_arr = tf.image.resize(input_arr, size=(224, 224), method=tf.image.ResizeMethod.BILINEAR)
             input_arr = (tf.expand_dims(input_arr, axis=0),)
             model_pred = predict_tflite_model(pac_model, input_arr)[0]
@@ -2975,7 +2882,6 @@ class PAC_detedction:
         pac_predictions, junctional_predictions = [], []
         for i in range(len(r_peaks) - 1):
             try:
-                # time.sleep(0.1)
                 with results_lock:
                     fig, ax = plt.subplots(num=1, clear=True)
                     segment = lowpass_signal[r_peaks[i] - 25:r_peaks[i + 1] + 20]  # 16,20
@@ -3009,20 +2915,6 @@ class PAC_detedction:
             except Exception as e:
                 print(e)
         if junc_r_label == "Regular" and self.hr_counts <= 60:
-            #            if junc_union:
-
-            #                junc_count = junc_union.count(1)
-            #                total_index = len(junc_union)
-            #                jr_model_percent = junc_count / total_index
-            #                count = 0
-            #                new_threshold = 0.065 if self.hr_counts > 50 else 0.06
-            #                if len(p_t) > 4:
-            #                    for i in range(len(p_t) - 1):
-            #                        dis = (r_peaks[i + 1] - p_t[i][-1]) / 200
-            #                        if dis <= new_threshold: count += 1
-            #                jr_abstraction_per = ((len(r_peaks) - 1 - (len(p_index) - count)) / (len(r_peaks) - 1))
-            #                combined_percent = (jr_model_percent * 0.2) + (jr_abstraction_per * 0.8)
-
             if len(r_peaks) != 0:
                 junc_count = junc_union.count(1)
                 if junc_count / len(r_peaks) >= 0.5:
@@ -3078,7 +2970,6 @@ def first_degree_detect(ecg_signal, fs=200):
     block = []
     label = 'Abnormal'
 
-    # if r_Label == 'Regular' and hr_ <= 90:
     for i in range(len(r_index) - 1):
         aoi = ecg_signal[s_index[i]:q_index[i + 1]]
         if aoi.any():
@@ -3090,12 +2981,12 @@ def first_degree_detect(ecg_signal, fs=200):
             else:
                 if len(check) == 3:
                     sorted_indices = sorted(range(len(check)), key=lambda k: aoi[check[k]], reverse=True)
-                    check = [check[sorted_indices[0]], check[sorted_indices[1]]]  # Keep only the top two peaks
+                    check = [check[sorted_indices[0]], check[sorted_indices[1]]]
                     loc = check + s_index[i]
                 check1 = sorted(loc)
                 if len(check) == 2:
                     dist_next_r_index = r_index[i + 1] - check1[1]
-                    if dist_next_r_index >= 50:  # 0.3 sec
+                    if dist_next_r_index >= 50:
                         peaks1 = check + s_index[i]
                     else:
                         peaks1 = np.array([])
@@ -3180,7 +3071,6 @@ def SACompareShort(list1, val1, val2):
 
 def check_long_short_pause(r_index):
     SAf = []
-    # r_interval = np.diff(r_index)
     pause_label = 'Abnormal'
     if len(r_index) > 1:
         for i in range(len(r_index) - 1):
@@ -3201,7 +3091,6 @@ def check_long_short_pause(r_index):
         if noofpause != 0:
             pause_label = 'LONG_PAUSE'
 
-        # "noOfPauseList":[a/1000 for a in SAf if a>3000]
 
     if SACompareShort(SAf, 3500, 4000):
         l = []
@@ -3216,25 +3105,18 @@ def check_long_short_pause(r_index):
             noofpause = 0
         if noofpause != 0:
             pause_label = 'SHORT_PAUSE'
-        # "noOfPauseList":[a/1000 for a in SAf if a>=2000 and a<=2900 ]
     return pause_label
 
-def combine(ecg_signal, is_lead, class_name, r_id, fs=200, scale_factor=1): # , skip_afib_flutter=False
+def combine(ecg_signal, is_lead, class_name, r_id, fs=200, scale_factor=1):
     r_index = find_r_index(ecg_signal)
     s_index, q_index = check_qs_index(ecg_signal, r_index)
     t_peaks, p_peaks, pt_peaks = find_pt_index(ecg_signal, r_index)
 
     if scale_factor > 1:
         def upsample_array(arr, factor):
-            # Original indices
             x = np.arange(len(arr))
-            
-            # Interpolator (linear, cubic, etc.)
             f = interp1d(x, arr, kind='linear')  
-            
-            # New indices (more dense)
             x_new = np.linspace(0, len(arr) - 1, len(arr) * factor)
-            
             return f(x_new)
 
         ecg_signal = upsample_array(ecg_signal, factor=3)
@@ -3243,6 +3125,7 @@ def combine(ecg_signal, is_lead, class_name, r_id, fs=200, scale_factor=1): # , 
     pace_label, pacemaker_index = pacemake_detect(baseline_signal, fs=fs)
 
     pac_data = {
+        'pac_plot': [],
         'PAC_Union': [],
         "PAC_Index": [],
         "PAC_Isolated": 0,
@@ -3261,7 +3144,6 @@ def combine(ecg_signal, is_lead, class_name, r_id, fs=200, scale_factor=1): # , 
     afib_predict, flutter_predict, block_model_prediction = 0, 0, 0
 
 
-    #    vfib_or_asystole_output = check_vfib_vfl_model(ecg_signal, vfib_vfl_model)
     vfib_or_asystole_output = vfib_model_check(ecg_signal, baseline_signal, lowpass_signal, vfib_model, fs)
 
     if vfib_or_asystole_output == "Abnormal" or vfib_or_asystole_output == "NORMAL":
@@ -3285,8 +3167,6 @@ def combine(ecg_signal, is_lead, class_name, r_id, fs=200, scale_factor=1): # , 
 
         pt = pqrst_data['PT PLot']
         hr_counts = hr_count_new if hr_count_new !=0 else pqrst_data['HR_Count']
-        hr_counts = hr_count_new if hr_count_new != 0 else pqrst_data['HR_Count']
-
         t_index = t_peaks if t_peaks else pqrst_data['T_Index']
         p_index = p_peaks if p_peaks else pqrst_data['P_Index']
         ex_index = pqrst_data['Ex_Index']
@@ -3368,13 +3248,13 @@ def combine(ecg_signal, is_lead, class_name, r_id, fs=200, scale_factor=1): # , 
 
                 if is_lead == "II" or is_lead == "III" or is_lead == "I" or is_lead == "V1" or is_lead == "V2" or is_lead == "V4" or is_lead == 'V5':
                     if all('Abnormal' in l for l in
-                           [afib_label, aflutter_label]):  # and len(pac_class) == 0 and len(pvc_class) == 0
+                           [afib_label, aflutter_label]):
                         lowpass_signal = lowpass(baseline_signal, 0.3)
                         first_deg_block_label, first_deg_block_index = first_degree_detect(lowpass_signal, fs)
                         abs_result = first_deg_block_label
                     if hr_counts <= 80:
                         if all('Abnormal' in l for l in [afib_label, aflutter_label, first_deg_block_label,
-                                                         jr_label]):  # and len(pac_class) == 0 and len(pvc_class) == 0
+                                                         jr_label]):
                             second_deg_block = BlockDetected(ecg_signal, fs).second_degree_block_detection()
                             if second_deg_block != 'Abnormal':
                                 abs_result = second_deg_block
@@ -3391,7 +3271,6 @@ def combine(ecg_signal, is_lead, class_name, r_id, fs=200, scale_factor=1): # , 
                     lowpass_signal = lowpass(baseline_signal, 0.3)
                     longqt_label = detection_long_qt(lowpass_signal, r_index, fs)
             else:
-#                if not skip_afib_flutter:
                 if is_lead == 'II' or is_lead == 'III' or is_lead == 'I' or is_lead == 'V5' or is_lead == 'V6':
                     afib_flutter_check = afib_flutter_detection(lowpass_signal, r_index, q_index, s_index, p_index,
                                                                 p_t, pr_interval, afib_model)
@@ -3420,7 +3299,7 @@ def combine(ecg_signal, is_lead, class_name, r_id, fs=200, scale_factor=1): # , 
                             pac_class = temp_pac.replace('-', '_')
                     if is_lead == "II" or is_lead == "III" or is_lead == "I" or is_lead == "V1" or is_lead == "V2" or is_lead == "V4" or is_lead == 'V5':
                         if all('Abnormal' in l for l in
-                               [afib_label, aflutter_label]):  # and len(pac_class) == 0 and len(pvc_class) == 0
+                               [afib_label, aflutter_label]):
                             lowpass_signal = lowpass(baseline_signal, 0.3)
                             first_deg_block_label, first_deg_block_index = first_degree_detect(lowpass_signal, fs)
                             abs_result = first_deg_block_label
@@ -3428,13 +3307,13 @@ def combine(ecg_signal, is_lead, class_name, r_id, fs=200, scale_factor=1): # , 
                         if hr_counts <= 80:
                             if all('Abnormal' in l for l in
                                    [afib_label, aflutter_label, first_deg_block_label, jr_label,
-                                    check_pause]):  # and len(pac_class) == 0 and len(pvc_class) == 0
+                                    check_pause]):
                                 second_deg_block = BlockDetected(ecg_signal, fs).second_degree_block_detection()
                             if second_deg_block != 'Abnormal':
                                 abs_result = second_deg_block
                             if all('Abnormal' in l for l in
                                    [afib_label, aflutter_label, first_deg_block_label, second_deg_block, jr_label,
-                                    check_pause]):  # and len(pac_class) == 0 and len(pvc_class) == 0
+                                    check_pause]):
                                 third_deg_block = BlockDetected(ecg_signal, fs).third_degree_block_deetection()
                             if third_deg_block != 'Abnormal':
                                 abs_result = third_deg_block
@@ -3464,7 +3343,6 @@ def combine(ecg_signal, is_lead, class_name, r_id, fs=200, scale_factor=1): # , 
         data = {'Input_Signal': ecg_signal,
                 'Baseline_Signal': baseline_signal,
                 'Lowpass_signal': lowpass_signal,
-                # 'Combine_Label':c_label.upper().replace("_","-"),
                 'Combine_Label': c_label,
                 'RR_Label': r_label,
                 'R_Index': r_index,
@@ -3530,7 +3408,6 @@ class RPeakDetection:
         lowcut = 0.5
         highcut = 50.0
         filtered_signal = self.butter_bandpass_filter(self.baseline_signal, lowcut, highcut, self.fs, order=6)
-        # Step 3: R-Peak Detection
         out = hami.hamilton_segmenter(filtered_signal, sampling_rate=self.fs)
         rpeaks = hami.correct_rpeaks(filtered_signal, out[0], sampling_rate=self.fs, tol=0.1)
         r_peaks = rpeaks[0].tolist()
@@ -3557,7 +3434,6 @@ def find_new_q_index(ecg, R_index, d):
             while c > 0:
                 while c > 0 and ecg[c - 1] > ecg[c]:
                     c -= 1
-                # q_.append(c)
                 while c > 0 and ecg[c - 1] < ecg[c]:
                     c -= 1
                 if q_ and q_[-1] == c:
@@ -3578,7 +3454,6 @@ def find_new_q_index(ecg, R_index, d):
             while c > 0:
                 while c > 0 and ecg[c - 1] < ecg[c]:
                     c -= 1
-                # q_.append(c)
                 while c > 0 and ecg[c - 1] > ecg[c]:
                     c -= 1
                 if q_ and q_[-1] == c:
@@ -3606,7 +3481,7 @@ def extract_number(filename):
 def prediction_model_mi(input_arr):
     classes = ['Abnormal', 'stdep', 'stele', 't_abnormal', 't_invert']
     input_arr = tf.io.decode_jpeg(tf.io.read_file(input_arr), channels=3)
-    input_arr = tf.image.resize(input_arr, size=(150,400), method=tf.image.ResizeMethod.BILINEAR) # (224, 224)
+    input_arr = tf.image.resize(input_arr, size=(150,400), method=tf.image.ResizeMethod.BILINEAR)
     input_arr = (tf.expand_dims(input_arr, axis=0),)
     model_pred = predict_tflite_model(let_inf_moedel, input_arr )[0]
     idx = np.argmax(model_pred)
@@ -3692,266 +3567,6 @@ def check_st_model(ecg_data, fs, _id):
     force_remove_folder(mi_temp_img)
     return result_dic
 
-
-# OCR text detection
-# Define a function to validate 'digits / digits ms' pattern
-# def is_single_format(value):
-#     return re.match(r'^\d+\s?[\|/]\s?\d+\s?ms$', value.strip(), re.IGNORECASE)
-
-
-# Function to validate HR values
-# def validate_hr(hr_values):
-#     validated_hr = []
-#     for hr in hr_values:
-#         # Remove non-digit characters
-#         hr_cleaned = re.sub(r'\D', '', hr)
-#         # Check if the cleaned HR is a 2 or 3 digit number
-#         if hr_cleaned.isdigit() and 10 <= int(hr_cleaned) <= 250:
-#             validated_hr.append(int(hr_cleaned))
-#         else:
-#             validated_hr.append(None)
-#     return validated_hr
-
-
-# Define a function to classify MI results
-# def classify_mi_result(input_list):
-#     keywords = ['lateral', 'inferior', 'abnormality']
-#     mi_result = [item for item in input_list if any(keyword in item.lower() for keyword in keywords)]
-#     result_classification = []
-#     for item in mi_result:
-#         if 'abnormality' in item.lower():
-#             result_classification.append('T_wave_Abnormality')
-#         if ' lateral' in item.lower() or item.lower().startswith('lateral'):
-#             result_classification.append('Lateral_MI')
-#         if 'inferior' in item.lower():
-#             result_classification.append('Inferior_MI')
-#     result_classification = list(set(result_classification))
-#     return result_classification
-
-
-# def classify_arrhythmia(input_list):
-#     afib_afl = []
-#     afib_keywords = ['atrial fibrillation', 'atrial fib', 'fibrillation']
-#     aflutter_keywords = ['atrial flutter', 'flutter']
-#     # Search for AFIB keywords
-#     if any(keyword in " ".join(input_list).lower() for keyword in afib_keywords):
-#         afib_afl.append('AFIB')
-#     # Search for AFLUTTER keywords
-#     if any(keyword in " ".join(input_list).lower() for keyword in aflutter_keywords):
-#         afib_afl.append('AFL')
-#     return afib_afl
-
-
-# def classify_hypertrophy(input_list):
-#     hypertrophy = []
-#     # Normalize and join all text
-#     input_text = " ".join(input_list).lower()
-#     # Replace underscores, slashes, and hyphens with spaces
-#     input_text = re.sub(r'[_/-]', ' ', input_text)
-#     input_text = re.sub(r'\s+', ' ', input_text)  # Collapse multiple spaces
-
-#     # Check for RVH
-#     if ('right ventricular hypertrophy' in input_text) or ('rvh' in input_text):
-#         hypertrophy.append('RVH')
-#     # Check for LVH
-#     if ('left ventricular hypertrophy' in input_text) or ('lvh' in input_text):
-#         hypertrophy.append('LVH')
-#     # Check for generic "ventricular hypertrophy"
-#     if 'ventricular hypertrophy' in input_text:
-#         # Use regex to extract a window of 3?4 words around the match
-#         match = re.search(r'(.{0,30}ventricular hypertrophy.{0,30})', input_text)
-#         if match:
-#             context = match.group(1)
-#             if 'left' not in context and 'right' not in context and 'lvh' not in context and 'rvh' not in context:
-#                 hypertrophy.append('LVH')
-
-#     return list(set(hypertrophy))  # Remove duplicates
-
-
-# Function to validate QT/QTcBaz and RR/PP values with duplicate and format check
-# def validate_intervals(interval_list):
-#     validated_intervals = []
-#     # Updated regex pattern to match 'xxx / xxx' or 'xxxx / xxxx' with or without 'ms'
-#     pattern = re.compile(r'(\d{3,4})\s*[/|]\s*(\d{3,4})', re.IGNORECASE)
-#     for interval in interval_list:
-#         match = pattern.search(interval)
-#         if match:
-#             # Format as 'xxx / xxx' or 'xxxx / xxxx' (removes 'ms' dependency)
-#             formatted_interval = f"{match.group(1)} / {match.group(2)}"
-#             validated_intervals.append(formatted_interval)
-#         else:
-#             validated_intervals.append(None)
-
-#     # Remove duplicates
-#     return list(dict.fromkeys(validated_intervals))
-
-
-# Function to remove 'ms', split values, and remove square brackets
-# def process_and_split(values):
-#     processed_dict = {"Part1": [], "Part2": []}
-#     for value in values:
-#         if value:
-#             # Remove 'ms', clean value, and split by '/'
-#             cleaned_value = re.sub(r'\s?ms$', '', value).strip()
-#             parts = cleaned_value.split('/')
-#             # Add split parts to respective keys, trimming extra spaces
-#             if len(parts) == 2:
-#                 processed_dict["Part1"].append(parts[0].strip())
-#                 processed_dict["Part2"].append(parts[1].strip())
-#     return processed_dict
-
-
-# def text_detection(img_path):
-#     img = cv2.imread(img_path)
-#     result = reader.readtext(img)
-#     HR = []
-#     QT_QTcBaz = []
-#     RR_PP = []
-#     QRS_values = []
-#     PR_values = []
-#     output_dict = {}
-#     extracted_text = [detection[1] for detection in result]
-
-#     for i, text in enumerate(extracted_text):
-#         match = re.search(r'(\d+)\s?(BPM|bpm|opm|bprn|bpr)', text)
-#         if match:
-#             HR.append(match.group(1))  # Extract only the numeric part
-#         elif any(keyword in text for keyword in ['BPM', 'bpm', 'opm', 'bprn', 'bpr']) and i > 0:
-#             prev_value = extracted_text[i - 1].strip()
-#             if prev_value.isdigit():
-#                 HR.append(prev_value)
-
-#         # Detect 'QRS' (case-insensitive) and validate its next value
-#         if text.lower() in ['qrs', 'qrs duration'] and i + 1 < len(extracted_text):
-#             next_value = extracted_text[i + 1]
-#             # Check if the next value is in the format 'xx ms' or 'xxx ms'
-#             if re.match(r'^\d{2,3}\s?ms$', next_value.strip(), re.IGNORECASE):
-#                 QRS_values.append(next_value.strip())
-#             elif next_value.isdigit():
-#                 QRS_values.append(next_value)
-
-#         # Detect 'PR' (case-insensitive) and validate its next value
-#         if text.lower() in ['pr', 'pr interval'] and i + 1 < len(extracted_text):
-#             next_value = extracted_text[i + 1]
-#             # Check if the next value is in the format 'xx ms' or 'xxx ms'
-#             if re.match(r'^\d{2,3}\s?ms$', next_value.strip(), re.IGNORECASE):
-#                 PR_values.append(next_value.strip())
-                
-#             elif next_value.isdigit():
-#                 PR_values.append(next_value)
-                
-#         if (
-#                 'QT / QTcBaz' in text or 'QT/ QTcB' in text or 'QT / QTcB' in text or 'QT/QTcB' in text or 'QTI/ QTcBaz' in text
-#                 or 'QTIQTc-Baz' in text or 'QTQTc-Baz' in text or (
-#                 text == 'QT' and i + 1 < len(extracted_text) and extracted_text[i + 1] == 'QTcBaz')):
-#             if text == 'QT' and i + 1 < len(extracted_text) and extracted_text[i + 1] == 'QTcBaz':
-#                 qt_index = i + 1
-#             else:
-#                 qt_index = i
-
-#             if qt_index + 1 < len(extracted_text) and is_single_format(extracted_text[qt_index + 1]):
-#                 QT_QTcBaz.append(extracted_text[qt_index + 1])
-#             elif qt_index + 2 < len(extracted_text):
-#                 value = f"{extracted_text[qt_index + 1]} / {extracted_text[qt_index + 2]}"
-#                 QT_QTcBaz.append(value)
-
-#         if text == 'QT:' and i + 2 < len(extracted_text) and extracted_text[i + 1] == 'QTcBaz':
-#             next_value = extracted_text[i + 2]
-#             if is_single_format(next_value):
-#                 QT_QTcBaz.append(next_value)
-
-#         if 'RR / PP' in text or 'RR/PP' in text or 'RR/ PP' in text or 'RRIPP' in text or 'PP' in text or 'RR / Pp' in text:
-#             if i + 1 < len(extracted_text):
-#                 next_value = extracted_text[i + 1]
-#                 if is_single_format(next_value):
-#                     RR_PP.append(next_value)
-#                 elif re.match(r'^\d+:\s*/\s*\d+\.ms$', next_value):
-#                     match = re.search(r'^(\d+):\s*/\s*(\d+)\.ms$', next_value)
-#                     if match:
-#                         normalized_value = f"{match.group(1)} / {match.group(2)} ms"
-#                         RR_PP.append(normalized_value)
-#                 elif i + 2 < len(extracted_text):
-#                     first_value = extracted_text[i + 1]
-#                     second_value = extracted_text[i + 2]
-#                     if second_value.lower().endswith('ms'):
-#                         value = f"{first_value} / {second_value}"
-#                         RR_PP.append(value)
-#                     elif first_value.isdigit() and second_value.isdigit():
-#                         value = f"{first_value} / {second_value} ms"
-#                         RR_PP.append(value)
-
-#         if text == 'RR' and i + 2 < len(extracted_text) and extracted_text[i + 1] == 'PP':
-#             next_value = extracted_text[i + 2]
-#             if is_single_format(next_value):
-#                 RR_PP.append(next_value)
-#             elif i + 3 < len(extracted_text):
-#                 first_value = extracted_text[i + 2]
-#                 second_value = extracted_text[i + 3]
-#                 if second_value.lower().endswith('ms'):
-#                     value = f"{first_value} / {second_value}"
-#                     RR_PP.append(value)
-#                 elif first_value.isdigit() and second_value.isdigit():
-#                     value = f"{first_value} / {second_value} ms"
-#                     RR_PP.append(value)
-
-#         if text == 'RR:' and i + 2 < len(extracted_text) and extracted_text[i + 1] == 'PP':
-#             next_value = extracted_text[i + 2]
-#             if is_single_format(next_value):
-#                 RR_PP.append(next_value)
-#             elif i + 3 < len(extracted_text):
-#                 first_value = extracted_text[i + 2]
-#                 second_value = extracted_text[i + 3]
-#                 if second_value.lower().endswith('ms'):
-#                     value = f"{first_value} / {second_value}"
-#                     RR_PP.append(value)
-
-#         if text == 'RR /: PP' and i + 1 < len(extracted_text):
-#             next_value = extracted_text[i + 1]
-#             if is_single_format(next_value):
-#                 RR_PP.append(next_value)
-
-#     validated_hr_list = validate_hr(HR)
-#     validated_qt_qtc_list = validate_intervals(QT_QTcBaz)
-#     validated_rr_pp_list = validate_intervals(RR_PP)
-#     classification = classify_mi_result(extracted_text)
-#     classify_arrhy = classify_arrhythmia(extracted_text)
-#     hypertrophy = classify_hypertrophy(extracted_text)
-
-#     if validated_hr_list:
-#         output_dict["HR"] = validated_hr_list[0]
-#     if validated_qt_qtc_list or validated_rr_pp_list:
-#         try:
-#             qt_split = process_and_split(validated_qt_qtc_list)
-#             rr_split = process_and_split(validated_rr_pp_list)
-#             output_dict["QT"] = int(qt_split["Part1"][0]) if qt_split['Part1'] else 0
-#             output_dict['QTcBaz'] = int(qt_split["Part2"][0]) if qt_split['Part2'] else 0
-#             output_dict["RR"] = int(rr_split["Part1"][0]) if rr_split['Part1'] else 0
-#             output_dict["PP"] = int(rr_split["Part2"][0]) if rr_split['Part2'] else 0
-#         except Exception as e:
-#             print(e)
-
-#     if classification:
-#         output_dict["MI"] = classification
-
-#     if classify_arrhy:
-#         output_dict["Arrhythmia"] = list(set(classify_arrhy))
-
-#     if hypertrophy:
-#         output_dict['Hypertrophy'] = hypertrophy
-
-#     if QRS_values:
-#         try:
-#             output_dict["QRS"] = int(QRS_values[0].split(' ')[0])
-#         except:
-#             output_dict["QRS"] = int(QRS_values[0].split('ms')[0])
-#     if PR_values:
-#         try:
-#             output_dict["PR"] = int(PR_values[0].split(' ')[0])
-#         except:
-#             output_dict["PR"] = int(PR_values[0].split('ms')[0])
-#     return output_dict
-
-
 def find_ecg_info(ecg_signal, intr_r_index, intr_q_index, intr_s_index, intr_p_index, intr_t_index, img_type, image_path):
     # if img_type == '12_1':
     #     fa = 130
@@ -3961,8 +3576,6 @@ def find_ecg_info(ecg_signal, intr_r_index, intr_q_index, intr_s_index, intr_p_i
     #     fa = 110
     fa = 200
     ocr_results = {}
-    # if img_type == '6_2':
-    #     ocr_results = text_detection(image_path)
     if len(intr_r_index) != 0: 
         rpeaks = intr_r_index
     else: 
@@ -4014,12 +3627,12 @@ def find_ecg_info(ecg_signal, intr_r_index, intr_q_index, intr_s_index, intr_p_i
         PRpeaks = round(abs((p_peaks[0] - rpeaks[1])*1000/fa), 2)
         if PRpeaks > 1000:
             new_pr = PRpeaks/10
-            PRpeaks = new_pr
+            PRpeaks = round(abs(new_pr), 2)
         if math.isnan(PRpeaks):
             PRpeaks = "0"
     except:
         PRpeaks = "0"
-    data_dic['PRInterval'] = PRpeaks
+    data_dic['PRInterval'] = int(PRpeaks)
     try:
         QTpeaks = round(abs((t_peaks[0]-intr_q_index[1])*1000/fa), 2)
         if QTpeaks > 1000:
@@ -4029,27 +3642,27 @@ def find_ecg_info(ecg_signal, intr_r_index, intr_q_index, intr_s_index, intr_p_i
             QTpeaks = "0"
     except:
         QTpeaks = "0"
-    data_dic['QTInterval'] = QTpeaks
+    data_dic['QTInterval'] = int(QTpeaks)
     try:
         SQpeaks = round(abs((intr_s_index[1]-intr_q_index[1])*1000/fa), 2)
         if SQpeaks > 1000:
             new_sq = SQpeaks / 10
-            SQpeaks = new_sq
+            SQpeaks = round(abs(new_sq), 2)
         if np.isnan(SQpeaks):
             SQpeaks = "0"
     except:
         SQpeaks = "0"
-    data_dic['QRSComplex'] = SQpeaks
+    data_dic['QRSComplex'] = int(SQpeaks)
     try:
         STseg = round(abs((t_peaks[0]-intr_s_index[1])*1000/fa), 2)
         if STseg > 1000:
             new_st = STseg / 10
-            STseg = new_st
+            STseg = round(abs(new_st),2)
         if np.isnan(STseg):
             STseg = "0"
     except:
         STseg = "0"
-    data_dic['STseg'] = STseg
+    data_dic['STseg'] = int(STseg)
     try:
         PP = intr_p_index
         RRO = rpeaks
@@ -4059,58 +3672,28 @@ def find_ecg_info(ecg_signal, intr_r_index, intr_q_index, intr_s_index, intr_p_i
             PRseg = round(abs(((PP[0]+20) - RRO[1])*1000/fa), 2)
             if PRseg > 1000:
                 new_pr_seg = PRseg/10
-                PRseg = new_pr_seg
+                PRseg = round(abs(new_pr_seg), 2)
     except:
         PRseg = "0"
-    data_dic['PRseg'] = PRseg
+    data_dic['PRseg'] = int(PRseg)
 
     QTint = []
     finallist = []
     try:
         for i in range(len(intr_q_index) - 1):
             try:
-#                if intr_q_index[i] == 0 or intr_t_index[i] == 0:
-#                    QTint.append(0)
-#                else:
-                  QT = abs(int(intr_q_index[i]) - int(intr_t_index[i])) / 200
-                  qtc_temp = QT * 1000
-                  if qtc_temp > 1000:
-                      new_qt = qtc_temp/10
-                      qtc_temp = new_qt
-                  QTint.append(qtc_temp)
+                QT = abs(int(intr_q_index[i]) - int(intr_t_index[i])) / 200
+                qtc_temp = QT * 1000
+                if qtc_temp > 1000:
+                    new_qt = qtc_temp/10
+                    qtc_temp = round(abs(new_qt), 2)
+                QTint.append(qtc_temp)
             except:
                 QTint.append(0)
     except:
         QTint.append(0)
-    data_dic['QTc'] = QTint[0] if QTint else 0
-    # if ocr_results:
-    #     if 'QTcBaz' in ocr_results and ocr_results['QTcBaz'] != 0:
-    #         data_dic['QTc'] = ocr_results['QTcBaz']
-
-    #     if 'QT' in ocr_results and ocr_results['QT'] != 0:
-    #         data_dic['QTInterval'] = ocr_results['QT']
-
-    #     if 'RR' in ocr_results and ocr_results['RR'] != 0:
-    #         data_dic['rr_interval'] = ocr_results['RR']
-
-    #     if 'QRS' in ocr_results and ocr_results['QRS'] != 0:
-    #         data_dic['QRSComplex'] = ocr_results['QRS']
-
-    #     # if 'HR' in ocr_results and ocr_results['HR'] != 0:
-    #     #     data_dic['HR'] = ocr_results['HR']
-
-    #     if 'PR' in ocr_results and ocr_results['PR'] != 0:
-    #         data_dic['PRInterval'] = ocr_results['PR']
-    #     if 'MI' in ocr_results:
-    #         data_dic['MI'] = ocr_results['MI']
-    #     if 'Hypertrophy' in ocr_results:
-    #         data_dic['Hypertrophy'] = ocr_results['Hypertrophy']
-    #     if 'Arrhythmia' in ocr_results:
-    #         data_dic['Arrhythmia'] = list(set(ocr_results['Arrhythmia']))
-    
+    data_dic['QTc'] = int(QTint[0]) if QTint else 0
     return data_dic
-
-
 
 def detect_beats(ecg, rate, ransac_window_size=3.35, lowfreq=5.0, highfreq=9.0):
     ransac_window_size = int(ransac_window_size * rate)
@@ -4197,7 +3780,7 @@ def lad_rad_detect_beats(ecg, rate, ransac_window_size=3.0, lowfreq=5.0, highfre
     mean_window_len = int(rate * 0.125 + 1)
     lp_energy = np.convolve(shannon_energy, [1.0 / mean_window_len] * mean_window_len, mode='same')
 
-    lp_energy = scipy.ndimage.gaussian_filter1d(lp_energy, rate / lp_thresh)  # 14.0 for pos or neg
+    lp_energy = scipy.ndimage.gaussian_filter1d(lp_energy, rate / lp_thresh)
     lp_energy_diff = np.diff(lp_energy)
 
     zero_crossings = (lp_energy_diff[:-1] > 0) & (lp_energy_diff[1:] < 0)
@@ -4318,10 +3901,9 @@ def is_positive_r_wave(ecg_signal, fs):
     r_index = pqrst_data['R_index']
     q_index = pqrst_data['Q_Index']
 
-    # Check if r_index and q_index are non-empty
     if len(r_index) > 0 and len(q_index) > 0:
         count_positive_r = 0
-        total_r = min(len(r_index), len(q_index))  # Ensure comparison of equal length
+        total_r = min(len(r_index), len(q_index))
 
         for i in range(total_r):
             r_amplitude = ecg_signal[r_index[i]]
@@ -4330,7 +3912,6 @@ def is_positive_r_wave(ecg_signal, fs):
             if r_amplitude > q_amplitude:
                 count_positive_r += 1
 
-        # Check if 80% or more of the R amplitudes are greater than Q amplitudes
         if count_positive_r / total_r >= 0.6:
             return True
     return False
@@ -4343,10 +3924,9 @@ def is_negative_r_wave(ecg_signal, fs):
     r_index = pqrst_data['R_index']
     q_index = pqrst_data['Q_Index']
 
-    # Check if r_index and q_index are non-empty
     if len(r_index) > 0 and len(q_index) > 0:
         count_negative_r = 0
-        total_r = min(len(r_index), len(q_index))  # Ensure comparison of equal length
+        total_r = min(len(r_index), len(q_index))
 
         for i in range(total_r):
             r_amplitude = ecg_signal[r_index[i]]
@@ -4355,7 +3935,6 @@ def is_negative_r_wave(ecg_signal, fs):
             if r_amplitude < q_amplitude:
                 count_negative_r += 1
 
-        # Check if 80% or more of the R amplitudes are less than Q amplitudes
         if count_negative_r / total_r >= 0.60:
             return True
     return False
@@ -4370,29 +3949,8 @@ class arrhythmia_detection:
         self.image_path = image_path
         self.scale_factor = scale_factor
 
-    #    def find_repeated_elements(self, nested_list, test_for='Arrhythmia'):
-    #        flat_list = []
-    #        if test_for == 'Arrhythmia':
-    #            threshold = 3
-    #        else:
-    #            threshold = 3
-    #        for element in nested_list:
-    #            if isinstance(element, list):
-    #                flat_list.extend(element)
-    #            else:
-    #                flat_list.append(element)
-    #        counts = Counter(flat_list)
-    #        if test_for == 'Arrhythmia':
-    #            repeated_elements = [item for item, count in counts.items() if count >= threshold]
-    #        else:
-    #            repeated_elements = [item for item, count in counts.items() if count >= threshold]
-    #        if "PVC-Couplet" in repeated_elements and repeated_elements.count("PVC-Couplet") <= 2:
-    #            repeated_elements.remove("PVC-Couplet")
-    #
-    #        return repeated_elements
 
     def find_repeated_elements(self, nested_list, test_for='Arrhythmia'):
-        # Flatten the nested list
         flat_list = []
         for element in nested_list:
             if isinstance(element, list):
@@ -4402,22 +3960,17 @@ class arrhythmia_detection:
 
         counts = Counter(flat_list)
         print("counts:",counts)
-        # Default threshold
         threshold = 3
 
-        # Check if any item containing "PAC" appears 2 or more times
         if test_for == 'Arrhythmia':
-#            afib_related_found = any(item for item, count in counts.items() if 'AFIB' or 'AFL' in item and count >= 2)
             pvc_related_found = any(item for item, count in counts.items() if 'PVC' in item and count >= 2)
             pac_related_found = any(item for item, count in counts.items() if 'PAC' in item and count >= 2)
             ivr_related_found = any(item for item, count in counts.items() if 'IVR' in item and count >= 2)
             if pac_related_found or ivr_related_found or pvc_related_found: # or afib_related_found
                 threshold = 2
 
-        # Get elements meeting the threshold
         repeated_elements = [item for item, count in counts.items() if count >= threshold]
 
-        # Special condition: remove "PVC-Couplet" if count = 2
         if "PVC_Couplet" in repeated_elements and counts["PVC_Couplet"] <= 2:
             repeated_elements.remove("PVC_Couplet")
 
@@ -4427,18 +3980,6 @@ class arrhythmia_detection:
         self.leads_pqrst_data = {}
         arr_final_result = mi_final_result = 'Abnormal'
 
-        # skip_afib_flutter = False
-        # if self.img_type == '6_2':
-        #     ocr = text_detection(self.image_path)
-
-        #     if "Arrhythmia" in ocr and ocr["Arrhythmia"]:
-        #         arr_list = ocr["Arrhythmia"]
-        #         unique_arr = set(arr_list)
-
-        #         if unique_arr == {"AFIB"} or unique_arr == {"AFL"}:
-        #             skip_afib_flutter = True
-
-        # try:
         pvc_predict_list, pac_predict_list, junctional_predict_list = [], [], []
         block_predict_list, afib_predict_list, flutter_predic_list = [], [], []
         for lead in self.all_leads_data.columns:
@@ -4449,7 +3990,7 @@ class arrhythmia_detection:
             if ecg_signal.any():
 
                 arrhythmia_result = combine(ecg_signal, lead, self.img_type, self._id, self.fs,
-                                             scale_factor=self.scale_factor) # skip_afib_flutter=skip_afib_flutter,
+                                             scale_factor=self.scale_factor) 
 
                 baseline_signal = arrhythmia_result['Baseline_Signal']
                 lowpass_signal = arrhythmia_result['Lowpass_signal']
@@ -4516,11 +4057,6 @@ class arrhythmia_detection:
                         'mi_data']:
                         mi_labels.append(self.leads_pqrst_data[lead]['mi_data']['lbbb_rbbb_label'])
                         mi_per_list.append(self.leads_pqrst_data[lead]["mi_data"]['lbbb_rbbb_per'])
-
-                # if len(lb_rb_mi_label) != 0:
-                #     check_lb_rb_label = self.find_repeated_elements(lb_rb_mi_label, test_for="mi")
-                #     if len(check_lb_rb_label) != 0:
-                #         mi_final_result = check_lb_rb_label
 
                 mi_labels = [condition for condition in mi_labels if condition not in ['STELE', 'STDEP']]
                 if len(mi_labels) != 0:
@@ -4597,7 +4133,6 @@ class arrhythmia_detection:
             else:
                 lafb_lpfb_result.append('Normal')
 
-            # print('all_arrhy:',all_arrhy_result)
             # If all_arrhy_result has more than 1 element and contains "Normal" in any case, remove it
             if len(all_arrhy_result) > 1:
                 all_arrhy_result = [arr for arr in all_arrhy_result if arr.lower() != "normal"]
@@ -4654,13 +4189,6 @@ class arrhythmia_detection:
 
             detections = []
             mi_confidence = 0
-
-            # if "Arrhythmia" in lead_info_data and lead_info_data["Arrhythmia"]:
-            #     lead_info_data["Arrhythmia"] = list(set(lead_info_data["Arrhythmia"]))
-            
-            # if "Arrhythmia" in lead_info_data and lead_info_data["Arrhythmia"]:
-            #     for arr in lead_info_data["Arrhythmia"]:
-            #         unique_detections.add(arr)
             unique_detections = set()
             for lab in all_arrhy_result:
                 unique_detections.add(lab)
@@ -4728,14 +4256,6 @@ class arrhythmia_detection:
             if 'Normal' not in axis_davi:
                 detections.append({"detect": axis_davi[0], "detectType": "axisDeviation", "confidence": 100})
 
-#            if 'Normal' not in lafb_lpfb_result:
-#                detections.append({"detect": lafb_lpfb_result[0], "detectType": "MI", "confidence": 100})
-
-            # if 'Hypertrophy' in lead_info_data and isinstance(lead_info_data['Hypertrophy'], list):
-            #     for hypertrophy_label in lead_info_data['Hypertrophy']:
-            #         if hypertrophy_label and hypertrophy_label.lower() != 'normal':
-            #             detections.append({"detect": hypertrophy_label, "detectType": "Hypertrophy", "confidence": 100})
-
             for dete_arr in detections:
                 if dete_arr['detectType'] == 'Arrhythmia':
                     if "PVC" in dete_arr['detect'] or dete_arr['detect'] in ['VT', 'IVR', 'NSVT']:
@@ -4782,9 +4302,6 @@ class arrhythmia_detection:
                     self.leads_pqrst_data['pvcQrs'] = []
                     self.leads_pqrst_data['Vbeat'] = 0
                 self.leads_pqrst_data['beats'] = len(self.leads_pqrst_data[get_temp_lead]['arrhythmia_data']['R_Index'])
-
-
-
             else:
                 total_pac = []
                 self.leads_pqrst_data['beats'] = 0
@@ -4847,13 +4364,11 @@ def check_noise(all_leads_data, class_name, fs):
 
     noise_cou = noise_result.count('ARTIFACTS')
 
-    if noise_cou > 6: # len(all_leads_data.keys()) /2
+    if noise_cou > 6:
         final_result = 'ARTIFACTS'
 
     print(f"Final noise result: {final_result} (ARTIFACT count: {noise_cou})")
     return final_result
-
-import pillow_avif
 
 
 def convert_png_to_jpeg(input_path):
@@ -4871,23 +4386,22 @@ def convert_png_to_jpeg(input_path):
         if input_path.lower().endswith('.avif') or input_path.lower().endswith('.webp'):
             try:
                 with Image.open(input_path) as img:
-                    img = img.convert("RGBA")  # AVIF may include transparency
+                    img = img.convert("RGBA")
                     base = os.path.splitext(input_path)[0]
                     png_path = f"{base}.png"
                     img.save(png_path, "PNG")
                 os.remove(input_path)
                 print(f"Converted AVIF to PNG and removed original: {input_path}")
-                input_path = png_path  # Update to continue PNG ? JPEG
+                input_path = png_path 
             except Exception as e:
                 print(f"Error converting AVIF '{input_path}': {e}")
                 return input_path
 
-        # Handle .png files (including ones that were AVIF originally)
         if not input_path.lower().endswith('.png'):
             return input_path
 
         with Image.open(input_path) as img:
-            img = img.convert("RGB")  # JPEG doesn't support alpha
+            img = img.convert("RGB")
             base = os.path.splitext(input_path)[0]
             jpeg_path = f"{base}.jpeg"
             img.save(jpeg_path, "JPEG")
@@ -4899,43 +4413,6 @@ def convert_png_to_jpeg(input_path):
     except Exception as e:
         print(f"Error processing '{input_path}': {e}")
         return input_path
-
-
-# def convert_png_to_jpeg(input_path):
-#    """
-#    Converts a PNG image to JPEG format with .jpeg extension and overwrites the original file.
-#    Does nothing if the file is not a PNG.
-#
-#    Parameters:
-#    - input_path: str - Path to the input image file.
-#    """
-#    try:
-#        # Check file extension
-#        if not (input_path.lower().endswith('.png')):  # or input_path.lower().endswith('.jpg')):
-#            print(f"Skipped: '{input_path}' is not a PNG file.")
-#            return input_path
-#
-#        # Open the PNG image
-#        with Image.open(input_path) as img:
-#            # Convert to RGB (JPEG does not support transparency)
-#            img = img.convert("RGB")
-#
-#            # Save as .jpeg
-#            base = os.path.splitext(input_path)[0]
-#            jpeg_path = f"{base}.jpeg"
-#            img.save(jpeg_path, "JPEG")
-#        #            print(f"Converted to JPEG: {jpeg_path}")
-#
-#        # Delete the original PNG file
-#        os.remove(input_path)
-#        #        print(f"Removed original PNG: {input_path}")
-#
-#        return jpeg_path
-#
-#    except Exception as e:
-#        print(f"Error processing '{input_path}': {e}")
-#    return input_path
-
 
 def process_and_plot_leads(ecg_df, img_id, file_name, result, top_label, class_name="6_2", mm_per_sec=25, mm_per_mV=10,
                            signal_scale=0.01):
@@ -5029,27 +4506,26 @@ def process_and_plot_leads(ecg_df, img_id, file_name, result, top_label, class_n
             if lead not in df.columns:
                 continue
 
-            raw = df[lead].values  # result[lead]['arrhythmia_data']['Baseline_Signal']
-            # signal = (raw - np.mean(raw)) * signal_scale * mm_per_mV
+            raw = df[lead].values  
 
             if class_name == '3_4':
-                amplitude_boost_boxes = 2 #0.1
+                amplitude_boost_boxes = 2
                 y_offset = fig_height_mm - grid_padding_mm / 3 - (r + 1) * box_height_mm
             else:
                 amplitude_boost_boxes = 4
                 y_offset = fig_height_mm - grid_padding_mm / 2 - (r + 1) * box_height_mm
 
-            amplitude_boost_mm = amplitude_boost_boxes * 1  # 1 mm per box
+            amplitude_boost_mm = amplitude_boost_boxes * 1
             scale_factor = mm_per_mV + amplitude_boost_mm
 
             signal = (raw - np.mean(raw)) * signal_scale * scale_factor
 
             if class_name == '3_4':
-                gap_mm = 2 #5  # Space between columns 2 & 3
-                shift_left_mm = 3  # Shift first column to the left by 3mm
+                gap_mm = 2 
+                shift_left_mm = 3 
 
                 if c == 0:
-                    x_offset = c * box_width_mm - shift_left_mm  # Shift column 0 left
+                    x_offset = c * box_width_mm - shift_left_mm 
                 elif c > 0:
                     x_offset = c * box_width_mm + gap_mm
                 else:
@@ -5097,7 +4573,6 @@ def process_and_plot_leads(ecg_df, img_id, file_name, result, top_label, class_n
             pac_index, junc_index, pvc_index = [], [], []
             if lead in ['II', 'III', 'aVF', 'V1', 'V2', 'V5', 'V6']:
                 if 'PAC' in label_dict['Arrhythmia']:
-                    print("================")
                     pac_index = arrhythmia_data.get('PAC_DATA', {}).get('PAC_Index', [])
                 if 'Junctional' in label_dict['Arrhythmia']:
                     junc_index = arrhythmia_data.get('PAC_DATA', {}).get('junc_index', [])
@@ -5130,10 +4605,10 @@ def process_and_plot_leads(ecg_df, img_id, file_name, result, top_label, class_n
             
             display_label = remap.get(lead, lead)
 
-            label_shift_right_mm = 5  # Move label to the right for column 0
+            label_shift_right_mm = 5
 
             if c == 0:
-                label_x = x_offset + 3 + label_shift_right_mm  # Shift right
+                label_x = x_offset + 3 + label_shift_right_mm
                 label_align = 'left'
             else:
                 label_x = x_offset + time_mm[0] - 3
@@ -5161,32 +4636,19 @@ def process_and_plot_leads(ecg_df, img_id, file_name, result, top_label, class_n
             va="bottom")
 
     result['color_dict'] = color_dict
-    # plt.tight_layout()
     fig.savefig(f"Result/{file_name}_{img_id}.jpg", bbox_inches='tight', pad_inches=0.1, dpi=dpi)
     plt.close()
-
-    #    plt.tight_layout()
-    #    temp_path = f"cropped_lead_images/{file_name}_temp.jpg"
-    #    fig.savefig(temp_path, dpi=dpi, bbox_inches='tight', pad_inches=0)
-    #    plt.close()
-    #
-    #    final_path = f"Result/{file_name}_{img_id}.jpg"
-    #    img = Image.open(temp_path)
-    #    img = img.resize((fig_width_px, fig_height_px), Image.LANCZOS)
-    #    img.save(final_path)
-    #    os.remove(temp_path)
-
     return result
 
 
 def setup_ecg_subplot(fig):
-    total_time = 10  # seconds for full width
+    total_time = 10 
     ax = fig.add_axes([0, 0, 1, 1], zorder=0)
 
-    ax.set_xticks(np.arange(0, total_time, 0.2))  # Major grid (5mm = 0.2s)
-    ax.set_yticks(np.arange(-50, 91, 5))  # Major voltage grid (5mm = 0.5mV)
-    ax.grid(True, which='major', color='red', linestyle='-', linewidth=0.8, alpha=0.45)  # Dark grid
-    ax.grid(True, which='minor', color='red', linestyle='-', linewidth=0.3, alpha=0.3)  # Light grid
+    ax.set_xticks(np.arange(0, total_time, 0.2)) 
+    ax.set_yticks(np.arange(-50, 91, 5))
+    ax.grid(True, which='major', color='red', linestyle='-', linewidth=0.8, alpha=0.45)
+    ax.grid(True, which='minor', color='red', linestyle='-', linewidth=0.3, alpha=0.3)
     ax.minorticks_on()
 
 
@@ -5235,68 +4697,47 @@ def orientation_image(image_path):
 
 
 def expectation_maximization(image, max_iter=1, tol=1e-6, div_thresh=2):
-    # Flatten the image into a 1D array
-
-    # add to input gray image
-
     pixel_values = image.flatten()
 
-    # Initialize parameters for two Gaussian distributions
-    # Initial means (just as an example, could be improved)
     mean_0 = np.mean(pixel_values) - np.std(pixel_values)
     mean_1 = np.mean(pixel_values) + np.std(pixel_values)
 
-    # Initial variances (arbitrary small values)
     var_0 = np.var(pixel_values) / 2
     var_1 = np.var(pixel_values) / 2
 
-    # Initial mixing coefficients
     weight_0 = 0.5
     weight_1 = 0.5
 
-    # Initialize a list to store probabilities
     probabilities = np.zeros((len(pixel_values), 2))
 
-    # E-step and M-step iterations
     for iteration in range(max_iter):
-        # E-step: Calculate responsibilities (probabilities)
         gaussian_0 = (1 / np.sqrt(2 * np.pi * var_0)) * np.exp(- (pixel_values - mean_0) ** 2 / (2 * var_0))
         gaussian_1 = (1 / np.sqrt(2 * np.pi * var_1)) * np.exp(- (pixel_values - mean_1) ** 2 / (2 * var_1))
 
-        # Compute responsibilities
         weighted_gaussian_0 = weight_0 * gaussian_0
         weighted_gaussian_1 = weight_1 * gaussian_1
         total = weighted_gaussian_0 + weighted_gaussian_1
 
-        # Normalize
         probabilities[:, 0] = weighted_gaussian_0 / total
         probabilities[:, 1] = weighted_gaussian_1 / total
 
-        # M-step: Update parameters
-        # Update weights (mixing coefficients)
         weight_0 = np.mean(probabilities[:, 0])
         weight_1 = np.mean(probabilities[:, 1])
 
-        # Update means
         mean_0 = np.sum(probabilities[:, 0] * pixel_values) / np.sum(probabilities[:, 0])
         mean_1 = np.sum(probabilities[:, 1] * pixel_values) / np.sum(probabilities[:, 1])
 
-        # Update variances
         var_0 = np.sum(probabilities[:, 0] * (pixel_values - mean_0) ** 2) / np.sum(probabilities[:, 0])
         var_1 = np.sum(probabilities[:, 1] * (pixel_values - mean_1) ** 2) / np.sum(probabilities[:, 1])
 
-        # Check for convergence
         if iteration > 0:
             mean_diff = abs(mean_1 - mean_0)
             if mean_diff < tol:
                 print(f"Converged after {iteration} iterations.")
                 break
 
-    # After convergence, the threshold is chosen as the mean between the two Gaussian components
     threshold = (mean_0 + mean_1) / 2
-    # print(threshold)
     threshold = threshold / div_thresh
-    # print(f'after={threshold}')
     return threshold
 
 
@@ -5318,14 +4759,11 @@ def extract_black_on_white(image_path, ecg_type, orig_height=None, orig_width=No
         image = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
         threshold = expectation_maximization(image, div_thresh=1)
 
-        # Use original image size for threshold logic
         if orig_height is not None and orig_width is not None and ((orig_height > 2000 and orig_width > 2000) or (orig_height == 1536 and orig_width == 2048)):
             threshold = 60
-            # print(f"{threshold}")
         else:
             threshold = int(threshold)
             threshold = np.clip(threshold, 190, 190)
-            # print(f"{threshold}")
         lower_black = np.array([0, 0, 0], dtype=np.uint8)
         upper_black = np.array([int(threshold), int(threshold), int(threshold)], dtype=np.uint8)
         black_mask = cv2.inRange(original_img, lower_black, upper_black)
@@ -5347,43 +4785,6 @@ def extract_black_on_white(image_path, ecg_type, orig_height=None, orig_width=No
 
         return result_on_white
 
-# def sliding_window_prediction(image_path, size=512, stride=256):
-#     img = cv2.imread(image_path)
-#     orig_h, orig_w = img.shape[:2]  # Save original shape!
-#     pad_h = (size - orig_h % size) if orig_h % size != 0 else 0
-#     pad_w = (size - orig_w % size) if orig_w % size != 0 else 0
-#     image = cv2.copyMakeBorder(img, 0, pad_h, 0, pad_w, cv2.BORDER_REFLECT)
-
-#     h, w = image.shape[:2]
-#     output = np.zeros((h, w), dtype=np.float32)
-#     count_map = np.zeros((h, w), dtype=np.float32)
-
-#     for y in range(0, h, stride):
-#         for x in range(0, w, stride):
-#             x_end = min(x + size, w)
-#             y_end = min(y + size, h)
-#             x_start = x_end - size if x_end - x < size else x
-#             y_start = y_end - size if y_end - y < size else y
-
-#             tile = image[y_start:y_start+size, x_start:x_start+size]
-#             tile_input = np.expand_dims(tile, axis=0)
-#             preprocess_input = get_preprocessing('resnet50')
-#             tile_input = preprocess_input(tile_input.astype(np.float32))
-
-#             pred = binary_model.predict(tile_input, verbose=0)[0, :, :, 0]
-#             output[y_start:y_start+size, x_start:x_start+size] += pred
-#             count_map[y_start:y_start+size, x_start:x_start+size] += 1
-
-#     count_map[count_map == 0] = 1
-#     pred = output / count_map
-#     pred_cropped = pred[:orig_h, :orig_w]
-#     binary_mask = (pred_cropped >= 0.7).astype(np.uint8) * 255
-#     inverted_mask = cv2.bitwise_not(binary_mask)
-#     cv2.imwrite(image_path, inverted_mask)
-#     return inverted_mask
-
-
-# -------------------------------- 29/10 change----------------------------------------
 def preprocess_patch(img_patch):
     img_patch = img_patch / 255.0
     img_patch = np.transpose(img_patch, (2, 0, 1))
@@ -5427,8 +4828,6 @@ def sliding_window_prediction(img_path, size=(512,512), stride=128):
     mask = save_mask(torch.tensor(averaged_mask), save_path)
     return mask
 
-# -------------------------------- 29/10 change----------------------------------------
-
 class ImageFilter:
     """Wraps an image with easy pixel access."""
 
@@ -5448,7 +4847,6 @@ class Point:
     def __init__(self, x, y):
         self.x = x
         self.y = y
-
 
 class SignalExtractor:
     """
@@ -5471,8 +4869,7 @@ class SignalExtractor:
             List of extracted signals as lists of Point objects.
         """
         N = ecg.width
-        # print("N",N)
-        LEN, SCORE = (2, 3)  # Cache values
+        LEN, SCORE = (2, 3)
         rois = self.__get_roi(ecg)
         mean = lambda cluster: (cluster[0] + cluster[-1]) / 2
         cache = {}
@@ -5491,9 +4888,9 @@ class SignalExtractor:
                         ctr = math.ceil(mean(pc))
                         if node not in cache:
                             cache[node] = [[ctr, None, 1, 0]] * self.__n
-                        ps = cache[node][roi_i][SCORE]  # Previous score
-                        d = abs(ctr - rois[roi_i])  # Vertical distance to ROI
-                        g = self.__gap(pc, c)  # Disconnection level
+                        ps = cache[node][roi_i][SCORE]
+                        d = abs(ctr - rois[roi_i])
+                        g = self.__gap(pc, c)
                         costs[pc] = ps + d + N / 50 * g
 
                     best = min(costs, key=costs.get)
@@ -5522,7 +4919,6 @@ class SignalExtractor:
 
         if len(rois) < self.__n:
             self.__n = len(rois)
-            # raise ("The indicated number of ROIs could not be detected.")
             pass
 
         return sorted(rois[: self.__n])
@@ -5571,9 +4967,6 @@ class SignalExtractor:
 
         return raw_signals
 
-
-from collections import namedtuple
-from typing import Iterable
 Point = namedtuple("Point", ["x", "y"])
 
 class SignalExtractor_3_4:
@@ -5635,52 +5028,6 @@ class SignalExtractor_3_4:
         rois = sorted(rois[0 : self.__n])
         return rois
 
-    # def __get_roi(self, ecg: np.ndarray) -> Iterable[int]:
-    
-    #     WINDOW = 10
-    #     SHIFT = (WINDOW - 1) // 2
-    #     h, w = ecg.shape
-    #     stds = np.zeros(h)
-
-    #     # Compute vertical std profile
-    #     for i in range(h - WINDOW + 1):
-    #         y0, y1 = (i, i + WINDOW - 1)
-    #         std = ecg[y0:y1, :].reshape(-1).std()
-    #         stds[i + SHIFT] = std
-
-    #     # --- STEP 1: Smooth standard deviation profile ---
-    #     smoothed = cv2.GaussianBlur(stds.reshape(-1, 1), (1, 51), 0).ravel()
-
-    #     # --- STEP 2: Detect candidate peaks ---
-    #     min_distance = int(h * 0.1)
-    #     mean_val = np.mean(smoothed)
-    #     peaks, _ = find_peaks(smoothed, distance=min_distance, height=mean_val * 0.3)
-
-    #     # --- STEP 3: Sort by y position (top to bottom) ---
-    #     peaks = sorted(peaks)
-
-    #     # --- STEP 4: Handle missing peaks (faint leads) ---
-    #     if len(peaks) < self.__n:
-    #         # Estimate approximate vertical spacing based on available peaks
-    #         if len(peaks) > 1:
-    #             avg_spacing = int(np.mean(np.diff(peaks)))
-    #         else:
-    #             avg_spacing = int(h / (self.__n + 1))
-
-    #         # Fill in missing peaks based on spacing
-    #         filled = []
-    #         start = peaks[0] if len(peaks) > 0 else avg_spacing
-    #         for i in range(self.__n):
-    #             candidate = start + i * avg_spacing
-    #             if candidate < h:
-    #                 filled.append(candidate)
-    #         peaks = filled
-
-    #     # --- STEP 5: Return only top-most N ---
-    #     rois = sorted(peaks[:self.__n])
-
-    #     return rois
-
     def __get_clusters(self, ecg: np.ndarray, col: int) -> Iterable[Iterable[int]]:
         BLACK = 0
         clusters = []
@@ -5733,15 +5080,12 @@ def remove_spikes(signal, kernel_size=7, spike_threshold=15):
         return signal
 
     y_vals = np.array([p.y for p in signal])
-    # Pad signal on both ends to handle edge artifacts
     pad_len = kernel_size // 2
     padded_y = np.pad(y_vals, (pad_len, pad_len), mode='edge')
 
-    # Apply median filter
     y_median = medfilt(padded_y, kernel_size=kernel_size)
-    y_median = y_median[pad_len:-pad_len]  # Trim padding
+    y_median = y_median[pad_len:-pad_len] 
 
-    # Replace spikes with median values
     cleaned = []
     for i in range(len(signal)):
         if abs(y_vals[i] - y_median[i]) > spike_threshold:
@@ -5781,51 +5125,33 @@ def adjust_box_height_to_match(box, reference_box, image_height):
     y_max_ref = min(image_height, y_max_ref)
     return (x_min, y_min_ref, x_max, y_max_ref)
 
-
-# Function to get bounding box for left-side leads and extend it properly
 def get_left_bounding_box(leads, labels_and_boxes, right_leads_x_min, image_height):
     selected_boxes = [box for label, box in labels_and_boxes if label in leads]
 
     if not selected_boxes:
-        return None  # No leads detected for this side
+        return None 
 
     x_min = min(box[0] for box in selected_boxes)
-    y_min = max(min(box[1] for box in selected_boxes) - 110, 0)  # 80 Expand top, ensure within bounds
-    x_max = right_leads_x_min - 10  # Extend up to 10 pixels before right-side leads
-    y_max = min(max(box[3] for box in selected_boxes) + 250, image_height)  # Expand bottom, ensure within bounds
+    y_min = max(min(box[1] for box in selected_boxes) - 110, 0)
+    x_max = right_leads_x_min - 10
+    y_max = min(max(box[3] for box in selected_boxes) + 250, image_height)
 
     return (x_min, y_min, x_max, y_max), len(selected_boxes)
-
-
-## Function to get bounding box for right-side leads and extend it to 90% width
-#def get_right_bounding_box(leads, labels_and_boxes, image_width, image_height):
-#    selected_boxes = [box for label, box in labels_and_boxes if label in leads]
-#
-#    if not selected_boxes:
-#        return None  # No leads detected for this side
-#
-#    x_min = min(box[0] for box in selected_boxes)
-#    y_min = max(min(box[1] for box in selected_boxes) - 60, 0)  # Expand top, ensure within bounds
-#    x_max = int(image_width * 0.95)  # Extend right box to 90% of the image width
-#    y_max = min(max(box[3] for box in selected_boxes) + 250, image_height)  # Expand bottom, ensure within bounds
-#
-#    return (x_min, y_min, x_max, y_max), len(selected_boxes)
 
 def get_right_bounding_box(leads, labels_and_boxes, left_bbox, image_width, image_height):
     selected_boxes = [box for label, box in labels_and_boxes if label in leads]
 
     if not selected_boxes:
-        return None, 0  # No leads detected for this side
+        return None, 0 
 
     x_min = min(box[0] for box in selected_boxes)
     y_min = max(min(box[1] for box in selected_boxes) - 70, 0)
     y_max = min(max(box[3] for box in selected_boxes) + 250, image_height)
 
-    # Match width with left bbox if available
     if left_bbox:
         left_width = left_bbox[2] - left_bbox[0]
         x_max = x_min + left_width
-        x_max = min(x_max, image_width)  # Ensure it doesn't exceed image bounds
+        x_max = min(x_max, image_width)
     else:
         x_max = int(image_width * 0.95)
 
@@ -5834,14 +5160,11 @@ def get_right_bounding_box(leads, labels_and_boxes, left_bbox, image_width, imag
 def clamp_bbox(x1, y1, x2, y2, image_width, image_height):
     return max(0, x1), max(0, y1), min(image_width, x2), min(image_height, y2)
 
-
-# Function to group bounding boxes into 4 columns
 def group_boxes_into_columns(boxes, num_columns=4, threshold=50):
     """Ensure exactly 4 columns, merging or splitting as needed."""
-    boxes = sorted(boxes, key=lambda b: b[0])  # Sort by X-coordinate
+    boxes = sorted(boxes, key=lambda b: b[0]) 
     columns = [[] for _ in range(num_columns)]
 
-    # Find width ranges for 4 columns
     x_positions = sorted(set(box[0] for box in boxes))
     column_width = (max(x_positions) - min(x_positions)) // num_columns
 
@@ -5852,8 +5175,6 @@ def group_boxes_into_columns(boxes, num_columns=4, threshold=50):
 
     return columns
 
-
-# Function to fix incomplete bounding boxes in each column
 def fix_column_boxes(columns, image_width):
     """Ensure each column forms a complete rectangle."""
     fixed_columns = []
@@ -5863,30 +5184,26 @@ def fix_column_boxes(columns, image_width):
             x1 = min(box[0] for box in col)
             x2 = max(box[2] for box in col)
         else:
-            x1, x2 = 0, 0  # Empty column
+            x1, x2 = 0, 0
 
         fixed_columns.append([x1, x2])
 
     return fixed_columns
 
-
-# Function to get bounding box for the entire 12\D71 column format
 def get_12x1_bounding_box(labels_and_boxes, image_width, image_height):
     if not labels_and_boxes:
-        return None  # No leads detected
+        return None 
 
     x_min = min(box[0] for _, box in labels_and_boxes)
-    y_min = max(min(box[1] for _, box in labels_and_boxes) - 50, 0)  # Expand top within bounds
-    x_max = int(image_width * 0.95)  # Extend width to 92% of the image
-    y_max = min(max(box[3] for _, box in labels_and_boxes) + 100, image_height)  # Expand bottom within bounds
+    y_min = max(min(box[1] for _, box in labels_and_boxes) - 50, 0)
+    x_max = int(image_width * 0.95)
+    y_max = min(max(box[3] for _, box in labels_and_boxes) + 100, image_height)
 
     return (x_min, y_min, x_max, y_max)
 
 
 def img_signle_extraction(crop_imgs_path, class_name, orig_height=None, orig_width=None):
     ecg_signle_dic = {}
-
-    # Mapping for lead names
     lead_mapping = {
         "top.jpg": ['I', 'II', 'III', 'aVR', 'aVL', 'aVF'],
         "bottom.jpg": ['V1', 'V2', 'V3', 'V4', 'V5', 'V6'],
@@ -5901,11 +5218,9 @@ def img_signle_extraction(crop_imgs_path, class_name, orig_height=None, orig_wid
     grid_width = 0
     first_img = [file for file in crop_imgs_path if any(x in file for x in ['c_1.jpg', 'left.jpg', 'top.jpg'])]
     first_img = first_img[0]
-    # print("First matched image:", first_img)
 
     img = cv2.imread(first_img)
     original_height, original_width = img.shape[:2]
-    # print("Original image width:", original_width)
     if class_name == '12_1':
         original_height = original_height * 2
 
@@ -5918,41 +5233,22 @@ def img_signle_extraction(crop_imgs_path, class_name, orig_height=None, orig_wid
     else:
         grid_width = None
 
-    # print("Grid width:", grid_width)
 
     for img_path in crop_imgs_path:
         file_name = Path(img_path).name
         if file_name not in lead_mapping:
-            continue  # Skip unknown files
+            continue
 
-        # Preprocess image
         filter_img = sliding_window_prediction(img_path, size=(512,512), stride=128)
-#        filter_img = extract_black_on_white(img_path, class_name, orig_height, orig_width)
 
         binary = cv2.bitwise_not(filter_img)
         cv2.imwrite(img_path, binary)
         
         ecg_image = ImageFilter(img_path)
         
-#         if class_name == '3_4':
-# #            extractor = SignalExtractor(n=3)
-#             extractor = SignalExtractor_3_4(n=3)
-#             ecg_image = binary
-#         elif class_name == '12_1':
-#             extractor = SignalExtractor(n=6)
-#         else:
-#             extractor = SignalExtractor(n=7)
-        
-# #        signals = extractor.extract_signals(ecg_image)
-#         if class_name == '3_4':
-#             signals = extractor.extract_signals_3_4(ecg_image)
-#         else:
-#             signals = extractor.extract_signals(ecg_image)
 
         if class_name == '3_4':
-            # extractor = SignalExtractor(n=3)
             extractor = SignalExtractor_3_4(n=3)
-            # # plt.imshow(binary);plt.show()
             ecg_image = binary
         elif class_name == '12_1':
             extractor = SignalExtractor_3_4(n=6)
@@ -5965,22 +5261,18 @@ def img_signle_extraction(crop_imgs_path, class_name, orig_height=None, orig_wid
 
 
         def y_signal_with_nans(xv, yv, y_jump_thresh=100):
-            import numpy as np
             xv = np.asarray(xv, dtype=float)
             yv = np.asarray(yv, dtype=float)
             if xv.size == 0:
                 return xv, yv
             
-            # Break if X jumps OR Y jumps significantly
             brk_x = np.where(np.diff(xv) > 1.5)[0]
             brk_y = np.where(np.abs(np.diff(yv)) > y_jump_thresh)[0]
             brk = np.unique(np.r_[brk_x, brk_y])
             
-            # Create new yv with NaNs for the spans between break points
             changed_yv = np.copy(yv)
             
-            # Set NaNs from brk[i] + 1 to brk[i + 1]
-            for i in range(len(brk)-1):  # Stop before the last break
+            for i in range(len(brk)-1):
                 start_nan = brk[i] + 1
                 end_nan = brk[i + 1]
                 if start_nan <= end_nan:
@@ -5991,8 +5283,6 @@ def img_signle_extraction(crop_imgs_path, class_name, orig_height=None, orig_wid
         for idx, ecg_signal in enumerate(signals):
 
             if class_name == '3_4':
-                # trimmed_signal = np.array([-p.y for p in ecg_signal]) #[10:-10]  # 15:-15
-
                 signal = np.array([-p.y for p in ecg_signal])
                 ref_section = signal[20:-20]  
                 mean = np.mean(ref_section)
@@ -6006,15 +5296,10 @@ def img_signle_extraction(crop_imgs_path, class_name, orig_height=None, orig_wid
                 z_last = (last_part - mean) / std
                 last_filtered = last_part[np.abs(z_last) < threshold]
                 trimmed_signal = np.concatenate([first_filtered, middle_part, last_filtered])
-#
-#                xv = np.array([p.x for p in ecg_signal])
-#                _, trimmed_signal = y_signal_with_nans(xv, trimmed_signal)
 
                 if file_name in ['c_1.jpg', 'c_2.jpg', 'c_3.jpg', 'c_4.jpg']:
                     ecg_signle_dic[lead_mapping[file_name][idx]] = trimmed_signal
-            elif class_name == '6_2':
-                # trimmed_signal = np.array([-p.y for p in ecg_signal]) # [50:-50]  # 22
-                
+            elif class_name == '6_2':                
                 signal = np.array([-p.y for p in ecg_signal])
                 ref_section = signal[20:-20]  
                 mean = np.mean(ref_section)
@@ -6028,14 +5313,10 @@ def img_signle_extraction(crop_imgs_path, class_name, orig_height=None, orig_wid
                 z_last = (last_part - mean) / std
                 last_filtered = last_part[np.abs(z_last) < threshold]
                 trimmed_signal = np.concatenate([first_filtered, middle_part, last_filtered])
-#                xv = np.array([p.x for p in ecg_signal])
-#                _, trimmed_signal = y_signal_with_nans(xv, trimmed_signal)
                 if idx < 6:
                     if file_name in ['left.jpg', 'right.jpg']:
                         ecg_signle_dic[lead_mapping[file_name][idx]] = trimmed_signal
-            else:
-                # trimmed_signal = np.array([-p.y for p in ecg_signal]) # [10:-10]  # 170:-120
-                
+            else:                
                 signal = np.array([-p.y for p in ecg_signal])
                 ref_section = signal[10:-10]  
                 mean = np.mean(ref_section)
@@ -6049,12 +5330,9 @@ def img_signle_extraction(crop_imgs_path, class_name, orig_height=None, orig_wid
                 z_last = (last_part - mean) / std
                 last_filtered = last_part[np.abs(z_last) < threshold]
                 trimmed_signal = np.concatenate([first_filtered, middle_part, last_filtered])
-#                xv = np.array([p.x for p in ecg_signal])
-#                _, trimmed_signal = y_signal_with_nans(xv, trimmed_signal)
                 if idx < 6:
                     if file_name in ['top.jpg', 'bottom.jpg']:
                         ecg_signle_dic[lead_mapping[file_name][idx]] = trimmed_signal
-
 
     return ecg_signle_dic, grid_width, original_height
 
@@ -6073,7 +5351,6 @@ def ensure_min_image_size(image_path: str,output_folder, min_size: int = 1000) -
         width, height = img.size
         aspect_ratio = width / height
 
-        # --- NEW: Handle extreme wide images ---
         if aspect_ratio > 4.4:
             print(f"[!] Extreme aspect ratio detected ({aspect_ratio:.2f}). Rescaling to 1600x1000.")
 
@@ -6085,22 +5362,17 @@ def ensure_min_image_size(image_path: str,output_folder, min_size: int = 1000) -
             temp_path = os.path.join(temp_folder, 'temp_wide_fixed.jpg')
             resized_img.save(temp_path)
 
-            # original_scale_factor = 1 (no upscaling applied yet)
             return temp_path, 1, image_path, 1
 
-        # --- Normal logic continues below ---
 
-        # Calculate the original scale factor needed to reach min size
         original_scale_factor = 1
         while width * original_scale_factor < min_size or height * original_scale_factor < min_size:
             original_scale_factor += 1
 
-        # If image already large enough, just return
         if width >= min_size or height >= min_size:
             print(f"[?] Image already meets size requirements: {width}x{height}")
             return image_path, 1, image_path, original_scale_factor
 
-        # Otherwise upscale 2ï¿½ (as in your original logic)
         scale_factor = 2
         new_size = (width * scale_factor, height * scale_factor)
 
@@ -6121,14 +5393,6 @@ def image_crop_and_save(image_path, class_name, output_folder):
     img = cv2.imread(image_path)
     orig_height, orig_width = img.shape[:2]
 
-#    while orig_height < 1000 or orig_width < 1000:
-#        img = cv2.resize(img, (orig_width * 2, orig_height * 2), interpolation=cv2.INTER_CUBIC)
-#        orig_height, orig_width = img.shape[:2]
-#    # Save the upscaled image as a temp file and use it for further processing
-#    temp_path = os.path.join(output_folder, "temp_upscaled.jpg")
-#    cv2.imwrite(temp_path, img)
-#    image_path = temp_path
-
     top_label = ''
     if img is None:
         print(f"Error reading {image_path}. Skipping...")
@@ -6140,13 +5404,11 @@ def image_crop_and_save(image_path, class_name, output_folder):
         scores = instances.scores.tolist()
         pred_classes = instances.pred_classes.tolist()
         boxes = instances.pred_boxes.tensor
-        # Dictionary to track the highest confidence detection per class
         best_detections = {}
         for i, cls in enumerate(pred_classes):
             if cls not in best_detections or scores[i] > best_detections[cls]['score']:
                 best_detections[cls] = {'score': scores[i], 'box': boxes[i]}
 
-        # Extract filtered detections
         if best_detections:
             filtered_scores = [det['score'] for det in best_detections.values()]
             filtered_boxes = torch.stack([det['box'] for det in best_detections.values()])
@@ -6156,14 +5418,12 @@ def image_crop_and_save(image_path, class_name, output_folder):
             filtered_boxes = torch.empty((0, 4))
             filtered_classes = []
 
-        # Store detected labels and boxes
         labels_and_boxes = []
         for i, (box, label) in enumerate(zip(filtered_boxes, filtered_classes)):
             x1, y1, x2, y2 = box.tolist()
             label_name = Lead_list[label] if Lead_list is not None else str(label)
             labels_and_boxes.append((label_name, (x1, y1, x2, y2)))
 
-        # Sort labels_and_boxes based on vertical position (y1)
         labels_and_boxes.sort(key=lambda x: x[1][1])
 
         if labels_and_boxes:
@@ -6176,17 +5436,14 @@ def image_crop_and_save(image_path, class_name, output_folder):
         left_side_leads = ["I", "II", "III", "aVR", "aVL", "aVF"]
         right_side_leads = ["V1", "V2", "V3", "V4", "V5", "V6"]
         image_height, image_width = img.shape[:2]
-        # Find the leftmost x-coordinate of right-side leads
         right_leads_x_min = min((box[0] for label, box in labels_and_boxes if label in right_side_leads),
                                 default=image_width)
 
-        # Get bounding boxes for left and right leads
         left_bbox, left_lead_count = get_left_bounding_box(left_side_leads, labels_and_boxes, right_leads_x_min,
                                                            image_height)
         right_bbox, right_lead_count = get_right_bounding_box(right_side_leads, labels_and_boxes,left_bbox, image_width,
                                                               image_height)
 
-        # Align boxes if either has only 5 leads
 
         if left_lead_count == 5 and right_lead_count == 6:
             left_bbox = adjust_box_height_to_match(left_bbox, right_bbox, image_height)
@@ -6194,78 +5451,36 @@ def image_crop_and_save(image_path, class_name, output_folder):
             right_bbox = adjust_box_height_to_match(right_bbox, left_bbox, image_height)
 
         try:
-            # Draw bounding boxes on the image and save cropped results
             if left_bbox is not None:
-                x1, y1, x2, y2 = map(int, left_bbox)  # Ensure integer values
+                x1, y1, x2, y2 = map(int, left_bbox)  
                 left_cropped = img[y1:y2, x1:x2]
                 if left_cropped.size > 0:
                     cv2.imwrite(os.path.join(output_folder, f"left.jpg"), left_cropped)
                     cv2.rectangle(img, (x1, y1), (x2, y2), (255, 0, 0), 5)
                     cv2.putText(img, "Left Leads", (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 2, (255, 0, 0), 5)
                 else:
-#                    print(f"No left-side leads detected for.")
                     pass
 
             if right_bbox is not None:
-                x1, y1, x2, y2 = map(int, right_bbox)  # Ensure integer values
+                x1, y1, x2, y2 = map(int, right_bbox)
                 right_cropped = img[y1:y2, x1:x2]
                 if right_cropped.size > 0:
                     cv2.imwrite(os.path.join(output_folder, f"right.jpg"), right_cropped)
                     cv2.rectangle(img, (x1, y1), (x2, y2), (0, 0, 255), 5)
                     cv2.putText(img, "Right Leads", (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 2, (0, 0, 255), 5)
                 else:
-#                    print(f"No right-side leads detected for .")
                     pass
         except Exception as e:
             print("Error : ", e, "Image not processs")
             pass
-
-#    elif class_name == '3_4':
-#        image_height, image_width = img.shape[:2]
-#
-#        # Convert tensor to list of lists
-#        box_list = filtered_boxes.tolist()
-#
-#        # Group into columns
-#        grouped_columns = group_boxes_into_columns(box_list, num_columns=4)
-#        fixed_columns = fix_column_boxes(grouped_columns, image_width)
-#
-#        
-#        target_w = None
-#        if len(fixed_columns) >= 2:
-#            target_w = max(1, int(fixed_columns[1][0] - fixed_columns[0][0]))
-#        
-#        if len(fixed_columns) > 0:
-#            col1_x1, col1_x2 = fixed_columns[0]
-#            print(f"Column 1 X-axis range: x1 = {col1_x1}, x2 = {col1_x2}")
-#
-#            if col1_x1 > 445 or (416 <= col1_x1 <= 417) or (221 <= col1_x1 <= 222) or (224 <= col1_x1 <= 225) or (226 <= col1_x1 <= 227) or (232 <= col1_x1 <= 233) or (274 <= col1_x1 <= 275) or (194 <= col1_x1 <= 195) or (200 <= col1_x1 <= 201) or (333 <= col1_x1 <= 334) or (371 <= col1_x1 <= 372):
-#                # Calculate how much to shift all columns
-#                shift_amount = int(image_width * 0.09)
-##                print(f"Column 1 is too far right. Shifting all columns by -{shift_amount} pixels.")
-#
-#                for i in range(len(fixed_columns)):
-#                    new_x1 = fixed_columns[i][0] - shift_amount
-#                    new_x2 = fixed_columns[i][1] - shift_amount
-#
-#                    # Clamp to image bounds
-#                    fixed_columns[i][0] = max(0, new_x1)
-#                    fixed_columns[i][1] = max(0, new_x2)
-#
-#        else:
-##            print("No columns found.")
-#            pass
     elif class_name == '3_4':
         image_height, image_width = img.shape[:2]
     
-        # Convert tensor to list of lists
         box_list = filtered_boxes.tolist()
     
-        # Group into columns
         grouped_columns = group_boxes_into_columns(box_list, num_columns=4)
         fixed_columns = fix_column_boxes(grouped_columns, image_width)
     
-        # target width = start(col2) - start(col1)
         target_w = None
         if len(fixed_columns) >= 2:
             target_w = max(1, int(fixed_columns[1][0] - fixed_columns[0][0]))
@@ -6274,27 +5489,21 @@ def image_crop_and_save(image_path, class_name, output_folder):
             col1_x1, col1_x2 = fixed_columns[0]
             print(f"Column 1 X-axis range: x1 = {col1_x1}, x2 = {col1_x2}")
     
-            # -------------------------------
-            # Updated broad-range logic
-            # -------------------------------
             shift_condition = (
                 (410 <= col1_x1 <= 415) or
                 (39.5 <= col1_x1 <= 40) or
-                (48 <= col1_x1 <= 80) or          # expanded for 78.31
-                (84 <= col1_x1 <= 110) or         # expanded for 85ï¿½103
-                (109 <= col1_x1 <= 125) or        # expanded for 110ï¿½122
+                (48 <= col1_x1 <= 80) or  
+                (84 <= col1_x1 <= 110) or         
+                (109 <= col1_x1 <= 125) or        
                 (129 <= col1_x1 <= 139) or
-                (142 <= col1_x1 <= 200) or        # includes 142.95
+                (142 <= col1_x1 <= 200) or        
                 (218 <= col1_x1 <= 250) or
                 (255 <= col1_x1 <= 270)
                 
             )
-    
-            # -------------------------------
-            # Updated center precision ranges
-            # -------------------------------
+
             center_ranges = [
-                (39, 39.4), (47, 48), (59, 59.5), (62, 63), (84, 85), (96, 98),
+                (39, 39.4), (47, 48), (59, 59.5), (62, 63), (84.10, 85), (96, 98),
                 (109, 110), (112, 113), (130, 131), (137, 138),
                 (147, 148), (154, 156), (165, 169), (178, 180),
                 (192, 193), (219, 220), (222, 223), (225, 226),
@@ -6303,7 +5512,7 @@ def image_crop_and_save(image_path, class_name, output_folder):
                 # Newly added precise ranges
                 (96.4, 96.6),
                 (115.4, 115.8),
-                (85.2, 86.4),
+                (85.2, 86.0),
                 (99.65, 99.75),
                 (122.0, 122.5),
                 (248.2, 248.3),
@@ -6318,10 +5527,7 @@ def image_crop_and_save(image_path, class_name, output_folder):
                 (110.4, 110.8)
             ]
     
-            # -------------------------------
-            # Combined shift condition:
-            # broad-range + precision range
-            # -------------------------------
+
             if shift_condition and any(start <= col1_x1 <= end for start, end in center_ranges):
     
                 shift_amount = int(image_width * 0.09)
@@ -6333,7 +5539,6 @@ def image_crop_and_save(image_path, class_name, output_folder):
                     # Clamp to image bounds
                     fixed_columns[i][0] = max(0, new_x1)
                     fixed_columns[i][1] = max(0, new_x2)
-    
         else:
             pass
 
@@ -6341,36 +5546,29 @@ def image_crop_and_save(image_path, class_name, output_folder):
         skipped_columns = []
         column_coords = []
 
-        # Compute global top and bottom using mid-last distance logic
         all_boxes = [box for col in grouped_columns for box in col]
         if not all_boxes:
-#            print("No boxes detected in any column.")
             pass
 
-        # New bottom logic: based on middle and last box in each column
         top_extensions = []
         bottom_extensions = []
 
         for col in grouped_columns:
             if len(col) >= 3:
-                # Sort boxes by top y1
                 sorted_col = sorted(col, key=lambda b: b[1])
                 first_box = sorted_col[0]
                 mid_box = sorted_col[len(sorted_col) // 2]
                 last_box = sorted_col[-1]
 
-                # Bottom extension (from mid to last)
                 dist_bottom = last_box[3] - mid_box[3]
                 if dist_bottom > 0:
                     bottom_extensions.append(dist_bottom * 0.6)
 
-                # Top extension (from mid to first)
                 dist_top = mid_box[1] - first_box[1]
                 if dist_top > 0:
                     top_extensions.append(dist_top * 0.6)#0.5
 
             elif len(col) >= 2:
-                # Fallback: use 2-point delta
                 sorted_col = sorted(col, key=lambda b: b[1])
                 dist_bottom = sorted_col[-1][3] - sorted_col[0][3]
                 if dist_bottom > 0:
@@ -6380,30 +5578,25 @@ def image_crop_and_save(image_path, class_name, output_folder):
                 if dist_top > 0:
                     top_extensions.append(dist_top * 0.5)
 
-        # Apply extensions
         default_top_extend = 180
         default_bottom_extend = 180
 
         min_top = min(box[1] for box in all_boxes)
         max_bottom = max(box[3] for box in all_boxes)
 
-        # Get unique sorted values to handle duplicates safely
         top_sorted = sorted(set(top_extensions))
         bottom_sorted = sorted(set(bottom_extensions))
 
-        # Check if there are at least 2 unique values
         if len(top_sorted) >= 2:
             second_min_top = top_sorted[1]
         else:
-            second_min_top = top_sorted[0]  # fallback to min
+            second_min_top = top_sorted[0]
 
         if len(bottom_sorted) >= 2:
             second_min_bottom = bottom_sorted[1]
         else:
-            second_min_bottom = bottom_sorted[0]  # fallback to min
+            second_min_bottom = bottom_sorted[0]
 
-        # print("Top: ", top_extensions, "2nd Min:", second_min_top)
-        # print("Bottom: ", bottom_extensions, "2nd Min:", second_min_bottom)
 
         extend_top_by = second_min_top if top_extensions else default_top_extend
         extend_bottom_by = second_min_bottom if bottom_extensions else default_bottom_extend
@@ -6415,31 +5608,21 @@ def image_crop_and_save(image_path, class_name, output_folder):
             x1, _ = fixed_columns[i]
 
             if not col_boxes:
-#                print(f"Skipping column {i + 1} due to no boxes.")
                 skipped_columns.append(i + 1)
                 continue
 
             col_top = global_top
             col_bottom = global_bottom
 
-            # Extend to next column or end of image
-#            if i == len(fixed_columns) - 1:
-#                x2 = int(image_width * 0.98)
-#            else:
-#                x2 = fixed_columns[i + 1][0] - 1
-
-            # Use next column start for cols 1..N-1. Force last col width = target_w.
             if i == len(fixed_columns) - 1 and target_w is not None:
                 x2 = min(image_width, int(x1 + target_w))
             else:
                 x2 = fixed_columns[i + 1][0] - 1
 
-            # Clamp
             x1, col_top, x2, col_bottom = clamp_bbox(int(x1), int(col_top), int(x2), int(col_bottom), image_width,
                                                      image_height)
 
             if x1 >= x2 or col_top >= col_bottom:
-#                print(f"Skipping invalid crop for column {i + 1}")
                 skipped_columns.append(i + 1)
                 continue
 
@@ -6448,16 +5631,13 @@ def image_crop_and_save(image_path, class_name, output_folder):
             # Crop and save
             cropped_region = img[col_top:col_bottom, x1:x2]
             if cropped_region.size == 0:
-#                print(f"Skipping empty crop for column {i + 1}")
                 skipped_columns.append(i + 1)
                 continue
 
             cv2.imwrite(os.path.join(output_folder, f"c_{i + 1}.jpg"), cropped_region)
-            # Draw rectangle and label
             cv2.rectangle(img, (x1, col_top), (x2, col_bottom), (255, 0, 0), 4)
             cv2.putText(img, f"Col {i + 1}", (x1 + 10, col_top + 50), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 0, 0), 2)
 
-        # Attempt to fix Column 1 by splitting Column 2
         if 1 in skipped_columns and 2 not in skipped_columns:
             if len(column_coords) > 0:
                 x1, x2, col_top, col_bottom = column_coords[0]
@@ -6467,7 +5647,6 @@ def image_crop_and_save(image_path, class_name, output_folder):
                     col1_region = img[col_top:col_bottom, x1:mid_x]
                     col2_region = img[col_top:col_bottom, mid_x:x2]
 
-                    # Save or draw
                     cv2.imwrite(os.path.join(output_folder, f"c_1.jpg"), col1_region)
                     cv2.rectangle(img, (x1, col_top), (mid_x, col_bottom), (0, 255, 0), 4)
                     cv2.putText(img, "Col 1", (x1 + 10, col_top + 50), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
@@ -6476,12 +5655,9 @@ def image_crop_and_save(image_path, class_name, output_folder):
                     cv2.rectangle(img, (mid_x, col_top), (x2, col_bottom), (0, 255, 255), 4)
                     cv2.putText(img, "Col 2", (mid_x + 10, col_top + 50), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 255), 2)
 
-#                    print("Column 1 was missing, so Column 2 was split into two parts.")
                 else:
-#                    print("ERROR: Invalid dimensions while splitting column 2.")
                     pass
             else:
-#                print("ERROR: No valid column coordinates to split column 2.")
                 pass  
 
     elif class_name == '12_1':
@@ -6489,7 +5665,6 @@ def image_crop_and_save(image_path, class_name, output_folder):
         full_bbox = get_12x1_bounding_box(labels_and_boxes, image_width, image_height)
         if full_bbox is not None:
             x1, y1, x2, y2 = map(int, full_bbox)
-            # Create label ? box mapping
             label_box_dict = {label: box for label, box in labels_and_boxes}
             if top_label == 'aVL' and all(k in label_box_dict for k in ['aVL', 'III', 'V1', 'V6']):
                 x1_exp = max(0, x1 + 180)
@@ -6515,49 +5690,38 @@ def image_crop_and_save(image_path, class_name, output_folder):
 
 
             else:
-                # Define top and bottom leads (standard 12-lead split)
                 top_leads = ['I', 'II', 'III', 'aVR', 'aVL', 'aVF']
                 bottom_leads = ['V1', 'V2', 'V3', 'V4', 'V5', 'V6']
 
-                # Check if we have at least 4 leads from both sets (to be safe)
                 if sum(1 for l in top_leads if l in label_box_dict) >= 4 and \
                         sum(1 for l in bottom_leads if l in label_box_dict) >= 4:
                     image_height, image_width = img.shape[:2]
-                    # Get boxes for each group
                     top_boxes = [label_box_dict[l] for l in top_leads if l in label_box_dict]
                     bottom_boxes = [label_box_dict[l] for l in bottom_leads if l in label_box_dict]
-                    # Compute left X (fixed) and right X (expandable)
                     x1_exp = max(0, int(min([box[0] for box in top_boxes + bottom_boxes])))
                     x2_initial = int(max([box[2] for box in top_boxes + bottom_boxes]) + 100)
-                    # Compute vertical bounds
                     top_y1 = max(0, int(min(box[1] for box in top_boxes) - 40))
                     top_y2 = int(max(box[3] for box in top_boxes) + 30)
                     bottom_y1 = int(min(box[1] for box in bottom_boxes) - 30)
                     bottom_y2 = min(image_height, int(max(box[3] for box in bottom_boxes) + 60))
-                    # Adjust vertical overlap or gap
                     if bottom_y1 < top_y2:
-                        # They overlap ? find midpoint and split
                         mid_y = (top_y2 + bottom_y1) // 2
                         top_y2 = mid_y
                         bottom_y1 = mid_y
                     else:
-                        # Soften the gap if too wide
                         gap = bottom_y1 - top_y2
                         if gap > 10:
                             shrink = gap // 2
                             top_y2 = min(top_y2 + shrink, image_height)
                             bottom_y1 = max(bottom_y1 - shrink, 0)
-                    # Enforce 75% width rule (expand x2 if needed)
                     min_required_width = int(image_width * 0.95)
                     current_width = x2_initial - x1_exp
                     if current_width < min_required_width:
                         x2_exp = min(image_width, x1_exp + min_required_width)
                     else:
                         x2_exp = min(image_width, x2_initial)
-                    # Crop using fixed left (x1_exp) and adjusted right (x2_exp)
                     top_crop = img[top_y1:top_y2 + 10, x1_exp:x2_exp]
                     bottom_crop = img[bottom_y1:bottom_y2 + 10, x1_exp:x2_exp]
-                    # Optional: save crops
                     cv2.imwrite(os.path.join(output_folder, f"top.jpg"), top_crop)
                     cv2.imwrite(os.path.join(output_folder, f"bottom.jpg"), bottom_crop)
 
@@ -6593,10 +5757,9 @@ def plot_and_save_ecg_pixel_based(df, file_name, img_id, layout='3x4', top_label
         projection = projection - np.min(projection)
         smoothed = cv2.GaussianBlur(projection.astype(np.float32).reshape(-1, 1), (5, 1), 0).flatten()
        
-        # Different peak detection based on layout
         if layout == '3x4':
             peaks, _ = find_peaks(smoothed, distance=3, prominence=np.max(smoothed) * 0.15)
-        else:  # 12x1
+        else: 
             peaks, _ = find_peaks(smoothed, distance=4, prominence=np.max(smoothed) * 0.05)
        
         if len(peaks) < 2:
@@ -6606,7 +5769,7 @@ def plot_and_save_ecg_pixel_based(df, file_name, img_id, layout='3x4', top_label
        
         if layout == '3x4':
             filtered = diffs[(diffs > 2) & (diffs < 30)]
-        else:  # 12x1
+        else:
             filtered = diffs[(diffs >= 6) & (diffs <= 15)]
        
         return int(np.round(np.median(filtered))) if len(filtered) > 0 else (10 if layout == '12x1' else 5)
@@ -6614,7 +5777,6 @@ def plot_and_save_ecg_pixel_based(df, file_name, img_id, layout='3x4', top_label
     def finalize_spacing(spacing: int, ratio: float) -> int:
         """Finalize spacing based on ratio and layout"""
         if layout == '3x4':
-#            print(spacing,ratio)
             if spacing > 16 and  spacing < 20:
                 final_spacing = 8
             elif spacing > 13:
@@ -6734,13 +5896,11 @@ def plot_and_save_ecg_pixel_based(df, file_name, img_id, layout='3x4', top_label
         if show:
             plt.figure(figsize=(20,10))
 
-            # Original binary with centroids
             plt.subplot(1,2,1)
             plt.imshow(img, cmap="gray")
             plt.scatter(points[:,0], points[:,1], c='red', s=20)
             plt.title("Original Centroids")
 
-            # Reconstructed grid
             plt.subplot(1,2,2)
             plt.imshow(img, cmap="gray")
             plt.scatter(detected_points[:,0], detected_points[:,1], c='green', s=30, label="Detected")
@@ -6748,7 +5908,8 @@ def plot_and_save_ecg_pixel_based(df, file_name, img_id, layout='3x4', top_label
                 plt.scatter(interp_points[:,0], interp_points[:,1], c='blue', s=30, label="Interpolated")
             plt.legend()
             plt.title("Reconstructed Grid (Centroids + Filled)")
-            plt.show()
+            # plt.show()
+            plt.close()
 
         return detected_points, red_img, grid_spacing
 
@@ -6761,44 +5922,34 @@ def plot_and_save_ecg_pixel_based(df, file_name, img_id, layout='3x4', top_label
         Returns:
             full_mask: Merged binary mask (0=background, 1=grid dot) at original resolution.
         """
-        # Load image and ensure it's grayscale
         original_image = cv2.imread(input_image_path, cv2.IMREAD_GRAYSCALE)
         h, w = original_image.shape
         print(f"Original image size: {h}x{w}")
 
-        # Pad image to make it divisible by 256
         pad_h = (256 - h % 256) % 256
         pad_w = (256 - w % 256) % 256
         padded_image = cv2.copyMakeBorder(original_image, 0, pad_h, 0, pad_w, cv2.BORDER_REFLECT)
         padded_h, padded_w = padded_image.shape
 
-        # Initialize empty mask
         full_mask = np.zeros((padded_h, padded_w), dtype=np.uint8)
 
-        # Process each 256x256 patch
         for y in tqdm(range(0, padded_h, 256), desc="Processing patches"):
             for x in range(0, padded_w, 256):
-                # Extract patch
                 patch = padded_image[y:y+256, x:x+256]
-                patch_norm = patch / 255.0  # Normalize to [0, 1]
+                patch_norm = patch / 255.0
 
-                # Predict (add batch and channel dims)
                 patch_pred = model.predict(patch_norm[np.newaxis, ..., np.newaxis], verbose=0)[0, ..., 0]
 
-                # Threshold (convert to binary)
                 patch_binary = (patch_pred > confidence).astype(np.uint8) * 255
 
-                # Insert into full mask
                 full_mask[y:y+256, x:x+256] = patch_binary
 
-        # Remove padding to return to original dimensions
         full_mask = full_mask[:h, :w]
 
 
         kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
         full_mask = cv2.morphologyEx(full_mask, cv2.MORPH_CLOSE, kernel, iterations=1)
 
-        # Save if output path is provided
         if output_path:
             cv2.imwrite(output_path, full_mask)
             print(f"Saved binary mask to: {output_path}")
@@ -6856,7 +6007,6 @@ def plot_and_save_ecg_pixel_based(df, file_name, img_id, layout='3x4', top_label
         dpi_val = 100
     else:  # 12x1
         if str(top_label).lower() == 'avl':
-            # Rearrange columns for aVL layout
             temp_mapping = {
                 'I': 'temp_aVL', 'II': 'temp_I', 'III': 'temp_aVR',
                 'aVR': 'temp_II', 'aVL': 'temp_aVF', 'aVF': 'temp_III'
@@ -6876,22 +6026,11 @@ def plot_and_save_ecg_pixel_based(df, file_name, img_id, layout='3x4', top_label
         default_width, default_height, default_spacing = 2495, 3545, 25
         dpi_val = 100
  
-    # Detect grid parameters from image if provided
     if image_path is not None:
         try:
             image, binary = to_binary_image(image_path)
             height, width = image.shape[:2]
             ratio = width / height
-            # cleaned = preprocess_for_grid(binary)
-            # h_spacing = detect_spacing_projection(cleaned, 'horizontal')
-            # v_spacing = detect_spacing_projection(cleaned, 'vertical')
-            # spacing = int(np.round((h_spacing + v_spacing) / 2))
-            # height, width = image.shape[:2]
-            # ratio = width / height
-        
-            # spacing = finalize_spacing(spacing, ratio)
-            # h_spacing = finalize_spacing(h_spacing, ratio)
-            # v_spacing = finalize_spacing(v_spacing, ratio)
         
             grid_image = process_entire_image_for_grid_detection(grid_model,original_path,confidence = 0.1)
             _, _, spacing = reconstruct_grid(grid_image)
@@ -6900,21 +6039,17 @@ def plot_and_save_ecg_pixel_based(df, file_name, img_id, layout='3x4', top_label
             print("hight",height)
             print("width",width)
             spacing_ration = spacing * spacing
-            print((spacing_ration / total_pixel))
-            print("=======")
-            print(spacing)
-            # if 0.002 > (spacing_ration / total_pixel) > 0.000250 and spacing <= 100 : spacing = int(spacing/5) * scale_factor
+            # print((spacing_ration / total_pixel))
+            # print(spacing)
             if 0.000240 < (spacing_ration / total_pixel) < 0.0015 and spacing < 80: spacing = int(spacing/5) * scale_factor
             else:
                 print("Falling back to standard ECG scaling (25 mm/s, 10 mm/mV)")
                 spacing = fallback_spacing(layout,height,width)
                 spacing = int(spacing/5) * scale_factor
                 
-                # spacing = 10 #int(px_per_mm/5)  
 
                 print(f"Fallback spacing: {spacing} px (1 mm grid)")
             if layout == '12x1':
-                # Calculate dimensions for 12x1 layout
                 box_height_mm = 25
                 time_sec = np.arange(df_cleaned.shape[0]) / 325
                 time_mm = time_sec * 25
@@ -6934,8 +6069,7 @@ def plot_and_save_ecg_pixel_based(df, file_name, img_id, layout='3x4', top_label
     
     width = grid_width
     height = grid_height
-    print(spacing, scale_factor)
-    # Calculate layout dimensions
+ 
     if layout == '12x1' and binary_width is not None:
         if spacing <= 5:
             actual_width = binary_width - (spacing * 5) * (5 if layout == '12x1' else 4)
@@ -6943,176 +6077,8 @@ def plot_and_save_ecg_pixel_based(df, file_name, img_id, layout='3x4', top_label
             actual_width = binary_width
         width = actual_width
    
-    # cell_width = width // cols
-    # cell_height = height // rows
- 
-    # scale_factor = 1
-    # while width * scale_factor < 1000 or height * scale_factor < 1000:
-    #     scale_factor += 1
-
-    # # Create figure and axis
-    # fig, ax = plt.subplots(figsize=(width * scale_factor / 100, height * scale_factor / 100), dpi=dpi_val)
-    # ax.set_xlim(0, width)
-    # ax.set_ylim(0, height)
-    # ax.set_aspect('equal')
-    # ax.axis('off')
- 
-    # # Draw ECG grid
-    # for x in range(0, width, spacing):
-    #     if x % (spacing * 5) == 0:
-    #         ax.axvline(x, color='#0057B7', linewidth=0.5)
-    #     else:
-    #         ax.axvline(x, color='#B3E0FF', linewidth=0.25)
-   
-    # for y in range(0, height, spacing):
-    #     if y % (spacing * 5) == 0:
-    #         ax.axhline(y, color='#0057B7', linewidth=0.5)
-    #     else:
-    #         ax.axhline(y, color='#B3E0FF', linewidth=0.25)
- 
-    # # Prepare label and color dictionaries for 3x4 layout
-    # label_dict = {}
-    # color_dict = {}
-    # if results is not None : # and layout == '3x4':
-    #     for item in results.get('detections', []):
-    #         if 'detectType' not in item or 'detect' not in item:
-    #             continue
-    #         key, value = item['detectType'], item['detect']
-    #         label_dict[key] = f"{label_dict.get(key, '')}, {value}" if key in label_dict else value
- 
-    # # Plot each lead
-    # for i, lead in enumerate(fixed_lead_order):
-    #     if lead not in available_leads:
-    #         if layout == '12x1':
-    #             print(f" Lead '{lead}' not found in CSV. Skipping.")
-    #         continue
-
-    #     # Use the full signal, including NaN values, to preserve breaks
-    #     signal = df_cleaned[lead].values  # Remove dropna()
-    #     x = np.arange(len(signal))  # x-axis based on full signal length
-
-    #     row = i // cols
-    #     col = i % cols
-
-    #     x_offset = col * cell_width
-    #     y_base = height - ((row + 1) * cell_height)
-
-    #     # Signal processing and positioning
-    #     raw_signal = signal
-    #     if layout == '3x4':
-    #         q_low = np.percentile(raw_signal[~np.isnan(raw_signal)], 17.5)  # Exclude NaN for percentile
-    #         q_high = np.percentile(raw_signal[~np.isnan(raw_signal)], 97.5)
-    #     else:  # 12x1
-    #         q_low = np.percentile(raw_signal[~np.isnan(raw_signal)], 2.5)
-    #         q_high = np.percentile(raw_signal[~np.isnan(raw_signal)], 97.5)
-
-    #     signal_height_for_layout = q_high - q_low
-    #     signal_median = np.nanmedian(raw_signal)
-    #     signal_shifted = raw_signal - signal_median
-
-    #     top_padding = 50
-    #     bottom_padding = 50
-    #     available_space = cell_height - (top_padding + bottom_padding)
-
-    #     if signal_height_for_layout > available_space:
-    #         # if layout == '12x1':
-    #             # print(f"?? Lead '{lead}' has noisy spikes and may overflow.")
-    #         y_shift = bottom_padding
-    #     else:
-    #         y_shift = bottom_padding + (available_space - signal_height_for_layout) // 2
-
-    #     downshift = 80 if layout == '3x4' else 40
-    #     y_signal = y_base + signal_shifted + (cell_height // 2) + y_shift - downshift
-
-    #     # Apply signal processing for 3x4 layout
-    #     if layout == '3x4':
-    #         # Apply Savitzky-Golay filter only to non-NaN segments
-    #         y_signal = np.copy(y_signal)  # Create a copy to avoid modifying original
-    #         mask = ~np.isnan(y_signal)
-    #         if np.any(mask):
-    #             y_signal[mask] = savgol_filter(y_signal[mask], window_length=4, polyorder=2)
-    #         linewidth = 2.5
-    #     else:
-    #         linewidth = 2.0
-
-    #     # Plot main ECG waveform with breaks for NaN values
-    #     plot_runs(ax, x + x_offset, y_signal, col="black", y_jump_thresh=100)
-
- 
-    #     # Color overlays for 3x4 layout only
-    #     if results is not None:
-    #         rhythm_color = None
-           
-    #         # Rhythm color logic
-    #         if lead in ['I', 'II', 'III', 'V1', 'V2', 'V5', 'V6']:
-    #             if 'BR' in label_dict.get('Arrhythmia', ''):
-    #                 rhythm_color = 'orangered'
-    #                 color_dict['BR'] = rhythm_color
-    #             elif 'TC' in label_dict.get('Arrhythmia', ''):
-    #                 rhythm_color = 'magenta'
-    #                 color_dict['TC'] = rhythm_color
-    #             elif any(x in label_dict.get('Arrhythmia', '') for x in
-    #                      ['I_Degree', 'III_Degree', 'MOBITZ_I', 'MOBITZ_II']):
-    #                 rhythm_color = 'blue'
-    #                 color_dict['block'] = rhythm_color
-    #             elif any(x in label_dict.get('Arrhythmia', '') for x in ['VFIB/Vflutter', 'ASYS']):
-    #                 rhythm_color = 'aqua'
-    #                 color_dict['VFIB_Asystole'] = rhythm_color
- 
-    #         if lead in ['II', 'III', 'aVF', 'I', 'aVL', 'V5', 'V6']:
-    #             if 'MI' in label_dict:
-    #                 rhythm_color = 'darkviolet'
-    #                 color_dict['MI'] = rhythm_color
- 
-    #         # Overlay colored rhythm if needed
-    #         if rhythm_color:
-    #             # ax.plot(x + x_offset, y_signal, color=rhythm_color, linewidth=3.0, alpha=0.7)
-    #             plot_runs(ax, x + x_offset, y_signal, col=rhythm_color, y_jump_thresh=100, lw=2.0)
-
-    #         # PAC, Junctional, PVC overlays
-    #         arrhythmia_data = results.get(lead, {}).get('arrhythmia_data', {})
-    #         pac_index = arrhythmia_data.get('PAC_DATA', {}).get('PAC_Index', [])
-    #         junc_index = arrhythmia_data.get('PAC_DATA', {}).get('junc_index', [])
-    #         pvc_index = arrhythmia_data.get('PVC_DATA', {}).get('PVC-Index', [])
- 
-    #         # PAC
-    #         if pac_index:
-    #             color_dict['PAC'] = 'green'
-    #             for st, ed in pac_index:
-    #                 plot_runs(ax, (x + x_offset)[st:ed], y_signal[st:ed], col=f"white", y_jump_thresh=100,lw=2)
-    #                 plot_runs(ax, (x + x_offset)[st:ed], y_signal[st:ed], col=f"green", y_jump_thresh=100)
-                    
-    #                 # ax.plot((x + x_offset)[st:ed], y_signal[st:ed], color='white', linewidth=5, alpha=0.3)
-    #                 # ax.plot((x + x_offset)[st:ed], y_signal[st:ed], color='green', linewidth=1, alpha=0.9)
- 
-    #         # JUNCTIONAL
-    #         if junc_index:
-    #             color_dict['Junctional'] = 'brown'
-    #             for st, ed in junc_index:
-    #                 plot_runs(ax, (x + x_offset)[st:ed], y_signal[st:ed], col=f"white", y_jump_thresh=100,lw=2)
-    #                 plot_runs(ax, (x + x_offset)[st:ed], y_signal[st:ed], col=f"brown", y_jump_thresh=100)
-                    
-    #                 # ax.plot((x + x_offset)[st:ed], y_signal[st:ed], color='white', linewidth=5, alpha=0.3)
-    #                 # ax.plot((x + x_offset)[st:ed], y_signal[st:ed], color='brown', linewidth=1, alpha=0.9)
- 
-    #         # PVC
-    #         if pvc_index:
-    #             color_dict['PVC'] = 'red'
-    #             for idx in pvc_index:
-    #                 st = max(idx - 20, 0)
-    #                 ed = min(idx + 50, len(x))
-    #                 # ax.plot((x + x_offset)[st:ed], y_signal[st:ed], color='white', linewidth=5, alpha=0.3)
-    #                 # ax.plot((x + x_offset)[st:ed], y_signal[st:ed], color='red', linewidth=2, alpha=0.9)
-    #                 plot_runs(ax, (x + x_offset)[st:ed], y_signal[st:ed], col=f"white", y_jump_thresh=100,lw=2)
-    #                 plot_runs(ax, (x + x_offset)[st:ed], y_signal[st:ed], col=f"red", y_jump_thresh=100)
- 
-    #     # Lead label
-    #     ax.text(x_offset, y_base + cell_height - top_padding // 2,
-    #             lead, fontsize=20, color='black', fontweight='bold')
-    # Normalize layout to lowercase for case-insensitive comparison
     layout = layout.lower()
 
-    # Determine base cell width and number of columns based on layout
     if layout == '3x4':
         cell_width_base = int(spacing * 5 * 12.5)
         last_col = 3
@@ -7131,39 +6097,31 @@ def plot_and_save_ecg_pixel_based(df, file_name, img_id, layout='3x4', top_label
     else:
         raise ValueError(f"Unsupported layout: {layout}")
 
-    # Initialize total width based on number of columns
     total_width = cell_width_base * cols
     height = grid_height
-
-    print("total_width", total_width)
-    print("height", height)
-
     cell_height = height // rows
 
     scale_factor = 1
     while total_width * scale_factor < 1000 and height * scale_factor < 1000:
         scale_factor += 1
 
-    # Create figure and axis
     fig, ax = plt.subplots(figsize=(total_width * scale_factor / 100, height * scale_factor / 100), dpi=dpi_val)
     ax.set_xlim(0, total_width)
     ax.set_ylim(0, height)
     ax.set_aspect('equal')
     ax.axis('off')
 
-    # Prepare label and color dictionaries for 3x4 layout
     label_dict = {}
     color_dict = {}
-    if results is not None:  # and layout == '3x4':
+    if results is not None:
         for item in results.get('detections', []):
             if 'detectType' not in item or 'detect' not in item:
                 continue
             key, value = item['detectType'], item['detect']
             label_dict[key] = f"{label_dict.get(key, '')}, {value}" if key in label_dict else value
 
-    # Plot each lead with column alignment without scaling
     cumulative_width = 0
-    signal_length_prev = 0  # Initialize previous signal length
+    signal_length_prev = 0
 
     final_width_adjusted = 0
     for i, lead in enumerate(fixed_lead_order):
@@ -7172,41 +6130,28 @@ def plot_and_save_ecg_pixel_based(df, file_name, img_id, layout='3x4', top_label
                 print(f" Lead '{lead}' not found in CSV. Skipping.")
             continue
 
-        # Use the full signal, including NaN values, to preserve breaks
         signal = df_cleaned[lead].values
         signal_length = len(signal)
         if signal_length == 0:
             continue
 
-        # Calculate column offset
         col = i % cols
         if col == 0:
-            cumulative_width = 0  # Reset for new row
+            cumulative_width = 0 
         else:
-            cumulative_width += (cell_width_base if signal_length_prev >= cell_width_base else signal_length_prev)  # Start next column at end of previous
-        # Adjust cell_width_base dynamically based on signal length
-        adjusted_cell_width = min(cell_width_base, signal_length)  # Use smaller of base width or signal length
+            cumulative_width += (cell_width_base if signal_length_prev >= cell_width_base else signal_length_prev)
+        adjusted_cell_width = min(cell_width_base, signal_length)
 
         row = i // cols
         y_base = height - ((row + 1) * cell_height)
 
-        # # Limit x-coordinates to fit within adjusted_cell_width
-        # x = np.arange(adjusted_cell_width)  # Use adjusted width
-        # x_offset = cumulative_width
-
-
-        # # Signal processing and positioning
-        # raw_signal = signal[:adjusted_cell_width]  # Truncate signal to fit adjusted column width
-
         x_original = np.arange(signal_length)
-        x_new = np.linspace(0, signal_length - 1, adjusted_cell_width)  # New x-coordinates for resampling
+        x_new = np.linspace(0, signal_length - 1, adjusted_cell_width)
 
-        # Interpolate signal to match adjusted_cell_width points
         interpolator = interp1d(x_original, signal, kind='linear', bounds_error=False, fill_value="extrapolate")
-        # raw_signal = x_original
         raw_signal = interpolator(x_new)
 
-        x = np.arange(adjusted_cell_width)  # Use adjusted width for plotting
+        x = np.arange(adjusted_cell_width)
         x_offset = cumulative_width
 
         if layout == '3x4':
@@ -7230,10 +6175,8 @@ def plot_and_save_ecg_pixel_based(df, file_name, img_id, layout='3x4', top_label
             y_shift = bottom_padding + (available_space - signal_height_for_layout) // 2
 
         downshift = 60 if layout == '3x4' else 40
-        # downshift = 40
         y_signal = y_base + signal_shifted + (cell_height // 2) + y_shift - downshift
 
-        # Apply signal processing for 3x4 layout
         if layout == '3x4':
             y_signal = np.copy(y_signal)
             mask = ~np.isnan(y_signal)
@@ -7247,9 +6190,6 @@ def plot_and_save_ecg_pixel_based(df, file_name, img_id, layout='3x4', top_label
           csv = pd.DataFrame(y_signal[:len(x)], columns=["y_signal"])
           csv.to_csv("/home/kmt/dark_demon_ai/123.csv", index=False)
         
-        # # Plot main ECG waveform with breaks for NaN values
-        # plot_runs(ax, x + x_offset, y_signal[:len(x)], col="black", y_jump_thresh=100)
-
         if layout == '6x2' and (width > 2300 or height > 2300):
             y_jump_thresh = 1000
             plot_runs(ax, x + x_offset, y_signal[:len(x)], col="black", y_jump_thresh=y_jump_thresh)
@@ -7257,18 +6197,14 @@ def plot_and_save_ecg_pixel_based(df, file_name, img_id, layout='3x4', top_label
             y_jump_thresh = 200
             plot_runs(ax, x + x_offset, y_signal[:len(x)], col="black", y_jump_thresh=100)
 
-        # Update previous signal length for the next iteration
         signal_length_prev = signal_length
 
         if col == last_col:
             final_width_adjusted = x_offset + adjusted_cell_width
         
-        # Color overlays for 3x4 layout only
-        # if layout == '3x4' and 
         if results is not None:
             rhythm_color = None
             
-            # Rhythm color logic
             if lead in ['I', 'II', 'III', 'V1', 'V2', 'V5', 'V6']:
                 if 'BR' in label_dict.get('Arrhythmia', ''):
                     rhythm_color = 'orangered'
@@ -7289,12 +6225,9 @@ def plot_and_save_ecg_pixel_based(df, file_name, img_id, layout='3x4', top_label
                     rhythm_color = 'darkviolet'
                     color_dict['MI'] = rhythm_color
 
-            # Overlay colored rhythm if needed
             if rhythm_color:
-                # ax.plot(x + x_offset, y_signal, color=rhythm_color, linewidth=3.0, alpha=0.7)
                 plot_runs(ax, x + x_offset, y_signal, col=rhythm_color, y_jump_thresh=y_jump_thresh)
 
-            # PAC, Junctional, PVC overlays
             arrhythmia_data = results.get(lead, {}).get('arrhythmia_data', {})
             
             low_pass_len = len(arrhythmia_data["Lowpass_signal"])
@@ -7321,8 +6254,6 @@ def plot_and_save_ecg_pixel_based(df, file_name, img_id, layout='3x4', top_label
                 
                     plot_runs(ax, (x + x_offset)[new_st:new_ed], y_signal[new_st:new_ed], col=f"white", y_jump_thresh=y_jump_thresh,lw=2)
                     plot_runs(ax, (x + x_offset)[new_st:new_ed], y_signal[new_st:new_ed], col=f"green", y_jump_thresh=y_jump_thresh)
-                    # ax.plot((x + x_offset)[st:ed], y_signal[st:ed], color='white', linewidth=5, alpha=0.3)
-                    # ax.plot((x + x_offset)[st:ed], y_signal[st:ed], color='green', linewidth=1, alpha=0.9)
 
             # JUNCTIONAL
             if junc_index:
@@ -7339,8 +6270,6 @@ def plot_and_save_ecg_pixel_based(df, file_name, img_id, layout='3x4', top_label
                     plot_runs(ax, (x + x_offset)[new_st:new_ed], y_signal[new_st:new_ed], col=f"white", y_jump_thresh=y_jump_thresh,lw=2)
                     plot_runs(ax, (x + x_offset)[new_st:new_ed], y_signal[new_st:new_ed], col=f"brown", y_jump_thresh=y_jump_thresh)
                     
-                    # ax.plot((x + x_offset)[st:ed], y_signal[st:ed], color='white', linewidth=5, alpha=0.3)
-                    # ax.plot((x + x_offset)[st:ed], y_signal[st:ed], color='brown', linewidth=1, alpha=0.9)
 
             # PVC
             if pvc_index:
@@ -7351,8 +6280,6 @@ def plot_and_save_ecg_pixel_based(df, file_name, img_id, layout='3x4', top_label
                         new_idx = idx
                     st = max(new_idx - 20, 0)
                     ed = min(new_idx + 50, len(x))
-                    # ax.plot((x + x_offset)[st:ed], y_signal[st:ed], color='white', linewidth=5, alpha=0.3)
-                    # ax.plot((x + x_offset)[st:ed], y_signal[st:ed], color='red', linewidth=2, alpha=0.9)
                     plot_runs(ax, (x + x_offset)[st:ed], y_signal[st:ed], col=f"white", y_jump_thresh=y_jump_thresh,lw=2)
                     plot_runs(ax, (x + x_offset)[st:ed], y_signal[st:ed], col=f"red", y_jump_thresh=y_jump_thresh)
 
@@ -7370,7 +6297,6 @@ def plot_and_save_ecg_pixel_based(df, file_name, img_id, layout='3x4', top_label
         y = np.asarray(line.get_ydata())
         if y.size == 0:
             continue
-        # keep only finite values to ignore NaN/Inf from breaks
         y = y[np.isfinite(y)]
         if y.size == 0:
             continue
@@ -7380,13 +6306,12 @@ def plot_and_save_ecg_pixel_based(df, file_name, img_id, layout='3x4', top_label
         all_y = np.concatenate(all_y_arrays)
         ymin, ymax = all_y.min(), all_y.max()
 
-        # handle degenerate case: flat line
         if ymin == ymax:
             delta = 1.0 if ymin == 0 else abs(ymin) * 0.1
             ymin -= delta
             ymax += delta
 
-        margin = 0.05 * (ymax - ymin)   # 8% headroom at top & bottom
+        margin = 0.05 * (ymax - ymin)
         ax.set_ylim(ymin - margin, ymax + margin)
 
 
@@ -7426,7 +6351,6 @@ def plot_and_save_ecg_pixel_based(df, file_name, img_id, layout='3x4', top_label
     fig.savefig(f"Result/{file_name}_{img_id}.jpg", bbox_inches='tight', pad_inches=0.1, dpi=100)
     plt.close()
    
-    # === CROP ALL LEADS FOR 3x4, 6x2, OR 12x1 LAYOUTS ===
     full_img_path = f"Result/{file_name}_{img_id}.jpg"
 
     full_img = cv2.imread(full_img_path)
@@ -7435,7 +6359,6 @@ def plot_and_save_ecg_pixel_based(df, file_name, img_id, layout='3x4', top_label
 
     img_h, img_w = full_img.shape[:2]
 
-    # === APPLY YOUR 216px REDUCTION ===
     padding_pixels = 26
     img_h = int(img_h) - padding_pixels
     img_w = int(img_w) - padding_pixels
@@ -7445,11 +6368,9 @@ def plot_and_save_ecg_pixel_based(df, file_name, img_id, layout='3x4', top_label
     if img_h <= 0 or img_w <= 0:
         raise ValueError(f"Image too small after reduction: {img_w}x{img_h}")
 
-    # Output folder
     output_folder = r"cropped_lead_images\temp_lead_images"
     os.makedirs(output_folder, exist_ok=True)
 
-    # Normalize layout
     layout = layout.strip().lower()
 
     lead_orders = {
@@ -7465,21 +6386,17 @@ def plot_and_save_ecg_pixel_based(df, file_name, img_id, layout='3x4', top_label
     rows = {'3x4':3, '6x2':6, '12x1':12}[layout]
     cols = {'3x4':4, '6x2':2, '12x1':1}[layout]
 
-    # STEP 1: Crop inner grid
     grid_img = full_img[margin_y: full_img.shape[0] - margin_y,
                         margin_x: full_img.shape[1] - margin_x]
 
     grid_h, grid_w = grid_img.shape[:2]
 
-    # STEP 2: Divide into cells
     cell_h = grid_h // rows
     cell_w = grid_w // cols
     print("layout", layout)
     if layout == '12x1':
-        print("Devide by 4")
         cell_w = int(cell_w/4)
     if layout == '6x2':
-        print("Devide by 2")
         cell_w = int(cell_w/2)
 
     for idx, lead in enumerate(leads):
@@ -7497,9 +6414,6 @@ def plot_and_save_ecg_pixel_based(df, file_name, img_id, layout='3x4', top_label
         cv2.imwrite(img_path, cropped)
         if os.path.getsize(img_path) > 50 * 1024:
             cv2.imwrite(img_path, cropped, [cv2.IMWRITE_JPEG_QUALITY, 40])
-    # ----------------------------------------------------------------
-    # DETECTION KEY FUNCTION DEBUGGING
-    # ----------------------------------------------------------------
 
     def get_detection_key(detectType, detect):
         detect = detect.lower()
@@ -7540,7 +6454,6 @@ def plot_and_save_ecg_pixel_based(df, file_name, img_id, layout='3x4', top_label
         return None
 
 
-    # Lead mapping dictionary
     detection_leads_map = {
         "Arrhythmia": ['I', 'II', 'III'],
         "Lateral_MI": ['I', 'aVL', 'V5', 'V6'],
@@ -7558,7 +6471,6 @@ def plot_and_save_ecg_pixel_based(df, file_name, img_id, layout='3x4', top_label
     }
 
     for detect in results.get("detections", []):
-
         key = get_detection_key(detect.get("detectType", ""), detect.get("detect", ""))
         if not key:
             continue
@@ -7635,20 +6547,15 @@ def finalize_spacing(spacing: int, ratio : int) -> int:
         final_spacing = spacing
     return final_spacing
 
-
 def reconstruct_grid(img, show=False):
-    # img = cv2.imread(binary_image_path, cv2.IMREAD_GRAYSCALE)
     if img is None:
         raise ValueError("Image not found or path is incorrect.")
     
-    # Binarize image
     _, img_bin = cv2.threshold(img, 127, 255, cv2.THRESH_BINARY)
 
-    # --- Find connected components and their centroids ---
     num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(img_bin, connectivity=8)
 
-    # Drop background (label 0)
-    points = centroids[1:]  # shape (N,2) (x,y)
+    points = centroids[1:]
     points = np.array(points)
 
     if len(points) < 10:
@@ -7659,21 +6566,16 @@ def reconstruct_grid(img, show=False):
     for i, p in enumerate(points):
         if not keep[i]:
             continue
-        # Query neighbors within min_dist_px
         idxs = tree.query_ball_point(p, r=10)
-        # Keep only the first, drop the rest
         for j in idxs:
             if j != i:
                 keep[j] = False
     points = points[keep]
-    # Build KD-tree to estimate spacing
     tree = cKDTree(points)
-    dists, _ = tree.query(points, k=2)  # nearest neighbor
-    grid_spacing = np.median(dists[:,1])  # robust estimate
+    dists, _ = tree.query(points, k=2) 
+    grid_spacing = np.median(dists[:,1])
     print(f"Estimated grid spacing: {grid_spacing:.2f} px")
-    # grid_spacing = 5
 
-    # PCA to align grid
     pca = PCA(n_components=2)
     points_centered = points - points.mean(axis=0)
     rotated = pca.fit_transform(points_centered)
@@ -7688,9 +6590,6 @@ def reconstruct_grid(img, show=False):
     detected = set(zip(grid_x, grid_y))
     missing = full_grid - detected
 
-    # print(f"Detected: {len(detected)}, Missing filled: {len(missing)}")
-
-    # Map back to image space
     detected_points = np.column_stack((grid_x, grid_y)) * grid_spacing
     detected_points = pca.inverse_transform(detected_points) + points.mean(axis=0)
 
@@ -7700,19 +6599,16 @@ def reconstruct_grid(img, show=False):
 
     red_img = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
     for (x,y) in np.vstack([detected_points, interp_points]).astype(int):
-        cv2.circle(red_img, (int(x), int(y)), 2, (0,0,150), -1)  # red filled dot
+        cv2.circle(red_img, (int(x), int(y)), 2, (0,0,150), -1) 
 
-    # Visualization
     if show:
         plt.figure(figsize=(20,10))
 
-        # Original binary with centroids
         plt.subplot(1,2,1)
         plt.imshow(img, cmap="gray")
         plt.scatter(points[:,0], points[:,1], c='red', s=20)
         plt.title("Original Centroids")
 
-        # Reconstructed grid
         plt.subplot(1,2,2)
         plt.imshow(img, cmap="gray")
         plt.scatter(detected_points[:,0], detected_points[:,1], c='green', s=30, label="Detected")
@@ -7720,12 +6616,10 @@ def reconstruct_grid(img, show=False):
             plt.scatter(interp_points[:,0], interp_points[:,1], c='blue', s=30, label="Interpolated")
         plt.legend()
         plt.title("Reconstructed Grid (Centroids + Filled)")
-        plt.show()
+        # plt.show()
+        plt.close()
 
     return detected_points, red_img, grid_spacing
-
-
-
 
 def process_entire_image_for_grid_detection(model, input_image_path, confidence = 0.005, output_path=None):
     """
@@ -7736,55 +6630,40 @@ def process_entire_image_for_grid_detection(model, input_image_path, confidence 
     Returns:
         full_mask: Merged binary mask (0=background, 1=grid dot) at original resolution.
     """
-    # Load image and ensure it's grayscale
     original_image = cv2.imread(input_image_path, cv2.IMREAD_GRAYSCALE)
     h, w = original_image.shape
     print(f"Original image size: {h}x{w}")
 
-    # Pad image to make it divisible by 256
     pad_h = (256 - h % 256) % 256
     pad_w = (256 - w % 256) % 256
     padded_image = cv2.copyMakeBorder(original_image, 0, pad_h, 0, pad_w, cv2.BORDER_REFLECT)
     padded_h, padded_w = padded_image.shape
 
-    # Initialize empty mask
     full_mask = np.zeros((padded_h, padded_w), dtype=np.uint8)
 
-    # Process each 256x256 patch
     for y in tqdm(range(0, padded_h, 256), desc="Processing patches"):
         for x in range(0, padded_w, 256):
             # Extract patch
             patch = padded_image[y:y+256, x:x+256]
-            patch_norm = patch / 255.0  # Normalize to [0, 1]
+            patch_norm = patch / 255.0
 
-            # Predict (add batch and channel dims)
             patch_pred = model.predict(patch_norm[np.newaxis, ..., np.newaxis], verbose=0)[0, ..., 0]
 
-            # Threshold (convert to binary)
             patch_binary = (patch_pred > confidence).astype(np.uint8) * 255
 
-            # Insert into full mask
             full_mask[y:y+256, x:x+256] = patch_binary
 
-    # Remove padding to return to original dimensions
     full_mask = full_mask[:h, :w]
-
-
     kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
     full_mask = cv2.morphologyEx(full_mask, cv2.MORPH_CLOSE, kernel, iterations=1)
 
-    # Save if output path is provided
     if output_path:
         cv2.imwrite(output_path, full_mask)
         print(f"Saved binary mask to: {output_path}")
 
     return full_mask
 
-
-
-
 def signal_extraction_and_arrhy_detection(image_path, up_image_name, _id, userId):
-
     results = {"avg_hr": 0,
                "arr_final_result": 'Abnormal',
                "mi_final_result": 'Abnormal',
@@ -7806,7 +6685,6 @@ def signal_extraction_and_arrhy_detection(image_path, up_image_name, _id, userId
                "color_dict": {}
                }
 
-#    paper_ecg_url = "http://192.168.2.66:1200/upload-ecg/" 
     
     try:
         crop_img = 'cropped_lead_images'
@@ -7840,25 +6718,6 @@ def signal_extraction_and_arrhy_detection(image_path, up_image_name, _id, userId
                     results["arr_not_analysis_leads"] = not_use_lead
                     results['status'] = 'fail'
         
-                    # paper ECG in upload the image
-    #                try:
-    #                    payload = {
-    #                        "file_id": _id,
-    #                        "user_id": userId,
-    #                        "file_name": up_image_name
-    #                    }
-    #                    files = {
-    #                        "file": open(image_path, "rb")
-    #                    }
-    #                    response = requests.post(paper_ecg_url, data=payload, files=files)
-    #                    print(response.json())  
-    #                    if response.status_code == 200:  
-    #                        print("message: Image uploaded successfully")
-    #                    else:
-    #                        print("error: ", response.json()) 
-    #                except requests.exceptions.RequestException as e:
-    #                    print("Paper ecg server not running.......",e)
-        
                 lead_count_detected = 9
                 if class_name in ["6_2", "12_1"]:
                     lead_count_detected = 6
@@ -7867,34 +6726,19 @@ def signal_extraction_and_arrhy_detection(image_path, up_image_name, _id, userId
                     lead_sequence = ["I", "II", "III", "aVF", "aVL", "aVR", "V1", "V2", "V3", "V4", "V5", "V6"]
                     analysis_leads = ecg_raw_signals.keys()
                     ordered_ecg_data = {lead: pd.Series(ecg_raw_signals.get(lead, [])) for lead in analysis_leads}
-                    ecg_df = pd.DataFrame(ordered_ecg_data)  # .fillna(0)
+                    ecg_df = pd.DataFrame(ordered_ecg_data)
 
-
-                    # ecg_df = ecg_df.apply(lambda col: col.fillna(col.median()), axis=0)
-        
-                    # Clean ECG data: remove rows after the first zero
-                    #            zero_row_index = ecg_df.apply(lambda row: (row == 0).any() or (row == 0.0).any(), axis=1).idxmax()
-                    #
-                    #            if zero_row_index != 0:
-                    #                ecg_df = ecg_df.iloc[:zero_row_index]
-                    
-        #            print("ALL leads: ", ecg_df.keys())
-        #            print('Not analysis lead', not_use_lead)
-                    # ecg_df.to_csv('/home/kmt/dark_demon_ai/123.csv',index=False)
                     arrhythmia_detector = arrhythmia_detection(ecg_df, fs=200, img_type=class_name, _id=_id,
                                                             image_path=image_path, scale_factor=original_scale_factor)
                     results = arrhythmia_detector.ecg_signal_processing()
                     print(results['detections'],"=====analysis_result")
-                    # --- MI/Arrhythmia base64 image logic ---
                     save_dir = r"cropped_lead_images\temp_lead_images"
                     os.makedirs(save_dir, exist_ok=True)
-                    # Remove old images
                     for old_img_path in glob.glob(os.path.join(save_dir, "*.jpg")):
                         try:
                             os.remove(old_img_path)
                         except Exception as e:
                             print(f"Error removing file {old_img_path}: {e}")
-                    # Mapping from detection type/label to leads
                     detection_leads_map = {
                         "Arrhythmia": ['I', 'II', 'III'],
                         "Lateral_MI": ['I', 'aVL', 'V5', 'V6'],
@@ -7953,10 +6797,7 @@ def signal_extraction_and_arrhy_detection(image_path, up_image_name, _id, userId
         
                         elif class_name == '6_2':
                             results = plot_and_save_ecg_pixel_based(ecg_df, file_name, _id, layout='6x2', top_label=top_label, image_path=image_path, binary_height=None, binary_width=None, results=results, scale_factor=img_scale_factor, original_path=original_path, grid_width=grid_width, grid_height=grid_height)
-        
-                            # results = process_and_plot_leads(ecg_df, _id, file_name, results, top_label, class_name=class_name,
-                            #                              mm_per_sec=25,
-                            #                              mm_per_mV=10, signal_scale=0.01)                                
+                                        
                         else:
                             results = results
                     except:
@@ -7976,25 +6817,7 @@ def signal_extraction_and_arrhy_detection(image_path, up_image_name, _id, userId
                 results['arr_not_analysis_leads'] = not_use_lead
                 results['detections'] = [{"detect": 'ARTIFACTS', "detectType": "Arrhythmia", "confidence": 100}]
                 results['status'] = 'fail'
-#                try:
-#                    payload = {
-#                        "file_id": _id,
-#                        "user_id": userId,
-#                        "file_name": up_image_name
-#                    }
-#                    files = {
-#                        "file": open(image_path, "rb")
-#                    }
-#                    response = requests.post(paper_ecg_url, data=payload, files=files)
-#                    print(response.json())  
-#                    if response.status_code == 200:  
-#                        print("message: Image uploaded successfully")
-#                    else:
-#                        print("error: ", response.json()) 
-#                except requests.exceptions.RequestException as e:
-#                    print("Paper ecg server not running.......",e)
-    
-    
+
         else:
             not_use_lead = ["I", "II", "III", "V1", "V2", "V3", "V4", "V5", "V6", "aVF", "aVL", "aVR"]
             results['arr_analysis_leads'] = []
@@ -8002,24 +6825,6 @@ def signal_extraction_and_arrhy_detection(image_path, up_image_name, _id, userId
             results['detections'] = [{"detect": 'ARTIFACTS', "detectType": "Arrhythmia", "confidence": 100}]
             results['status'] = 'fail'
     
-#            try:
-#                payload = {
-#                    "file_id": _id,
-#                    "user_id": userId,
-#                    "file_name": up_image_name
-#                }
-#                files = {
-#                    "file": open(image_path, "rb")
-#                }
-#                response = requests.post(paper_ecg_url, data=payload, files=files)
-#                print(response.json())  
-#                if response.status_code == 200:  
-#                    print("message: Image uploaded successfully")
-#                else:
-#                    print("error: ", response.json()) 
-#            except requests.exceptions.RequestException as e:
-#                print("Paper ecg server not running.......",e)
-
     except Exception as e:
         import traceback
         tb = traceback.extract_tb(e.__traceback__)
@@ -8030,33 +6835,6 @@ def signal_extraction_and_arrhy_detection(image_path, up_image_name, _id, userId
         results['arr_not_analysis_leads'] = not_use_lead = ["I", "II", "III", "V1", "V2", "V3", "V4", "V5", "V6", "aVF", "aVL", "aVR"]
         results['detections'] = [{"detect": 'ARTIFACTS', "detectType": "Arrhythmia", "confidence": 100}]
         results['status'] = 'fail'
-#    
-#        try:
-#            payload = {
-#                "file_id": _id,
-#                "user_id": userId,
-#                "file_name": up_image_name
-#            }
-#            files = {
-#                "file": open(image_path, "rb")
-#            }
-#            response = requests.post(paper_ecg_url, data=payload, files=files)
-#            print(response.json())  
-#            if response.status_code == 200:  
-#                print("message: Image uploaded successfully")
-#            else:
-#                print("error: ", response.json()) 
-#        except requests.exceptions.RequestException as e:
-#            print("Paper ecg server not running.......",e)
-
-    #    try:
-    #        if os.path.exists(mk_img_path):
-    #            force_remove_folder(mk_img_path)  # Use the force remove function
-    #            print(f"Removed folder: {mk_img_path}")
-    #        else:
-    #            print(f"Folder does not exist: {mk_img_path}")
-    #    except Exception as e:
-    #        print(f"Error removing folder: {e}")
 
     arrhythmia_result = results
 
@@ -8090,16 +6868,15 @@ def signal_extraction_and_arrhy_detection(image_path, up_image_name, _id, userId
     data = convert_to_serializable(data)
     with open("output.txt", "w") as f:
         f.write(json.dumps(data, indent=4))
-#    print(data)
     if os.path.isfile(f"Result/{file_name}_{_id}.jpg"):
         image_path = f"Result/{file_name}_{_id}.jpg"
         files = {
-            'data': (None, json.dumps(data)),  # JSON as part of form-data
-            'image': open(image_path, 'rb')  # Open the image file in binary mode
+            'data': (None, json.dumps(data)),
+            'image': open(image_path, 'rb')
         }
     else:
         files = {
-            'data': (None, json.dumps(data)),  # JSON as part of form-data
+            'data': (None, json.dumps(data)),
         }
     url = 'https://oeadev.projectkmt.com/oea/api/v1/uploads/processDataWithImage'
     response = requests.post(url, files=files)
@@ -8156,7 +6933,6 @@ def insert_ecg_result_to_db(data, ecg_df, db_url="mongodb://192.168.1.65:27017/"
         patient_id = data.get("_id", "Unknown")
         process_data = data.get("processData", {})
 
-        # --- Step 1: Build ECG signals dictionary ---
         ecg_signals = {}
         datalength = 0
         if isinstance(ecg_df, pd.DataFrame):
@@ -8164,31 +6940,23 @@ def insert_ecg_result_to_db(data, ecg_df, db_url="mongodb://192.168.1.65:27017/"
             for lead in ecg_df.columns:
                 ecg_signals[lead] = ecg_df[lead].astype(float).tolist()
 
-        # --- Step 2: Loop all detections ---
         for det in detections:
 
             detect_raw = det.get("detect", "Unknown")
             detect_value = detect_raw.replace(" ", "_")
 
-            # (A) MATCH ALL MAPPING KEYS FOR THIS DETECTION
             matched_mapping_keys = get_mapping_keys_for_detection(detect_raw)
 
-            # If no mapping found ? fallback to its own detect value
             if not matched_mapping_keys:
                 matched_mapping_keys = [detect_value]
 
-            # --- Step 3: For each mapping key insert data ---
             for arrhythmia_key in matched_mapping_keys:
-
-                # print(" ? Storing ECG in collection:", arrhythmia_key)
-
                 db_main = client["Analysis_data"]
                 collection_main = db_main[arrhythmia_key]
 
                 db_summary = client["Analysis_Patients"]
                 collection_summary = db_summary[arrhythmia_key]
 
-                # ---- Build Mongo Document ----
                 document = {
                     "Filename": patient_id,
                     "Arrhythmia": detect_raw,
@@ -8215,11 +6983,8 @@ def insert_ecg_result_to_db(data, ecg_df, db_url="mongodb://192.168.1.65:27017/"
                     "Data": ecg_signals,
                 }
 
-                # --- Insert into analysis collection ---
                 collection_main.insert_one(document)
-
-                # --- Update summary database ---
-                freq = 250
+                freq = 200
                 time_minutes = (datalength / freq) / 60 if datalength else 0
 
                 collection_summary.update_one(
@@ -8262,13 +7027,10 @@ def convert_to_serializable(obj):
     else:
         return obj
 
-
-
 def another_call():
     tf.keras.backend.clear_session()
     gc.collect()
 
-    # Get users in round-robin order (oldest timestamp first)
     user_ids = redis_client.zrange("user_priority_zset", 0, -1)
 
     datas = None
@@ -8283,20 +7045,15 @@ def another_call():
         if datas:
             selected_user_id = user_id_str
 
-            # Move this user to the end of priority queue by updating timestamp
             redis_client.zadd("user_priority_zset", {selected_user_id: time.time()})
 
-            # If queue is now empty, remove from zset
             if redis_client.llen(queue_key) == 0:
                 redis_client.zrem("user_priority_zset", selected_user_id)
             break
         else:
-            # If empty queue, remove from zset just in case
             redis_client.zrem("user_priority_zset", user_id_str)
 
     if not datas:
-        #        print("|PROCESS_OEA_dev_1| No users in priority queue")
-        #        time.sleep(3)
         return '', 200
 
     get_response = json.loads(datas)
@@ -8364,13 +7121,6 @@ if __name__ == '__main__':
         r_index_model = load_tflite_model("Model/rnn_model1_11_11_Unet.tflite")
         pt_index_model = load_tflite_model("Model/ecg_pt_detection_LSTMGRU_v32.tflite")
 
-        # -------------------- before -------------------------
-        # binary_model = load_model('Model/12_09_25_2_model_epoch_24.h5', compile=False)
-        # loss = tf.keras.losses.BinaryCrossentropy(from_logits=True)
-        # #new_model.compile(optimizer='adam', loss=loss, metrics=['accuracy'])
-        # binary_model.compile(optimizer='adam', loss=loss, metrics=['accuracy'])
-        # -------------------- before -------------------------
-        # --------------------------------------- change 29/10 -------------------------------
         BACKBONE = "resnet34"
         model = smp.UnetPlusPlus(
             encoder_name=BACKBONE,
@@ -8382,10 +7132,9 @@ if __name__ == '__main__':
         model.load_state_dict(torch.load(r'Model/binary_model_epoch_45_19_11.pth', map_location=DEVICE))
         model.to(DEVICE)
         model.eval()
-
-        reader = easyocr.Reader(['en'], gpu=False)
         grid_model = tf.keras.models.load_model(r'Model/grid_detector_train_14_10_train.h5')
     while True:
         another_call()
         time.sleep(1)
-        
+
+
