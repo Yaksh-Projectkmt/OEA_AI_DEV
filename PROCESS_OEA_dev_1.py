@@ -1,7 +1,6 @@
 # -*- coding: utf-8 -*-
 import os
 os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
-
 import base64
 import math
 import gc
@@ -5505,7 +5504,7 @@ def image_crop_and_save(image_path, class_name, output_folder):
             center_ranges = [
                 (39, 39.4), (47, 48), (59, 59.5), (62, 63), (84.10, 85), (96, 98),
                 (109, 110), (112, 113), (130, 131), (137, 138),
-                (147, 148), (154, 156), (165, 169), (178, 180),
+                (147, 147.5), (154, 156), (165, 169), (178, 180),
                 (192, 193), (219, 220), (222, 223), (225, 226),
                 (229, 230), (236, 237), (413, 414),
     
@@ -7118,7 +7117,7 @@ if __name__ == '__main__':
         block_model = load_tflite_model("Model/Block_Trans_mob_lightweight_v2_optimized.tflite")
         noise_model = load_tflite_model('Model/NOISE_20_GPT.tflite')
         let_inf_moedel = load_tflite_model("Model/MI_21_11_25_oea.tflite")
-        r_index_model = load_tflite_model("Model/rnn_model1_11_11_Unet.tflite")
+        r_index_model = load_tflite_model("Model/rnn_model1_01_12_Unet_oea.tflite")
         pt_index_model = load_tflite_model("Model/ecg_pt_detection_LSTMGRU_v32.tflite")
 
         BACKBONE = "resnet34"
