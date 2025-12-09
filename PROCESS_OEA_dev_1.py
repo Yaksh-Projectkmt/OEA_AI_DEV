@@ -6726,6 +6726,10 @@ def signal_extraction_and_arrhy_detection(image_path, up_image_name, _id, userId
                     analysis_leads = ecg_raw_signals.keys()
                     ordered_ecg_data = {lead: pd.Series(ecg_raw_signals.get(lead, [])) for lead in analysis_leads}
                     ecg_df = pd.DataFrame(ordered_ecg_data)
+                    
+                    mk_img_path = os.path.join('cropped_lead_images', _id)
+                    file_name = os.path.splitext(os.path.basename(image_path))[0]
+                    ecg_df.to_csv(os.path.join(mk_img_path, f"{file_name}_ecg_signals.csv"), index=False)
 
                     arrhythmia_detector = arrhythmia_detection(ecg_df, fs=200, img_type=class_name, _id=_id,
                                                             image_path=image_path, scale_factor=original_scale_factor)
