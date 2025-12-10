@@ -1616,13 +1616,14 @@ class filter_signal:
 
 # PVC detection
 class PVC_detection:
-    def __init__(self, ecg_signal, r_index, s_index, q_index, r_id, fs=100):  # 200
+    def __init__(self, ecg_signal, r_index, s_index, q_index, r_id, class_name, fs=100):  # 200
         self.ecg_signal = ecg_signal
         self.fs = fs
         self.r_id = r_id
         self.r_index = r_index
         self.s_index = s_index
         self.q_index = q_index
+        self.class_name = class_name
 
     def lowpass(self, file):
         b, a = signal.butter(3, 0.3, btype='lowpass', analog=False)
@@ -1935,8 +1936,11 @@ class PVC_detection:
         conf_vt_count = 0
         if vt_counter > 0:
             confirmation = self.VT_confirmation(self.low_pass_signal, detect_rpeaks)
-
-            if self.hr_count > 100 and v_bit_vt > 12:
+            if self.class_name == "3_4":
+                count_v_beat = 4
+            else:
+                count_v_beat = 8
+            if self.hr_count > 100 and v_bit_vt > count_v_beat:
                 conf_vt_count = 1
             if confirmation == "Abnormal":
                 vt_counter = 0
@@ -3187,7 +3191,7 @@ def combine(ecg_signal, is_lead, class_name, r_id, fs=200, scale_factor=1):
         if len(r_index) != 0 or len(s_index) != 0 or len(q_index) != 0:
             if (is_lead == 'II' or is_lead == 'III' or is_lead == "I" or is_lead == 'V1'
                     or is_lead == 'V2' or is_lead == 'V5' or is_lead == 'V6'):
-                pvc_data = PVC_detection(ecg_signal, r_index, s_index, q_index, r_id, fs).get_pvc_data()
+                pvc_data = PVC_detection(ecg_signal, r_index, s_index, q_index, r_id, class_name, fs).get_pvc_data()
 
                 pvc_count = pvc_data['PVC-Count']
 
@@ -3965,7 +3969,8 @@ class arrhythmia_detection:
             pvc_related_found = any(item for item, count in counts.items() if 'PVC' in item and count >= 2)
             pac_related_found = any(item for item, count in counts.items() if 'PAC' in item and count >= 2)
             ivr_related_found = any(item for item, count in counts.items() if 'IVR' in item and count >= 2)
-            if pac_related_found or ivr_related_found or pvc_related_found: # or afib_related_found
+            vt_related_found = any(item for item, count in counts.items() if 'VT' in item and count >= 2)
+            if pac_related_found or ivr_related_found or pvc_related_found or vt_related_found: # or afib_related_found
                 threshold = 2
 
         repeated_elements = [item for item, count in counts.items() if count >= threshold]
@@ -4165,7 +4170,7 @@ class arrhythmia_detection:
                     intr_t_index = self.leads_pqrst_data[get_temp_lead]["arrhythmia_data"]["T_Index"]
 
             lead_info_data = find_ecg_info(get_pro_lead, intr_r_index, intr_q_index, intr_s_index, intr_p_index, intr_t_index, self.img_type, self.image_path)
-            print("OCR result: ", lead_info_data)
+#            print("OCR result: ", lead_info_data)
             if 'HR' in lead_info_data:
                 if lead_info_data['HR'] is not None:
                     total_hr = lead_info_data['HR']
@@ -4413,231 +4418,231 @@ def convert_png_to_jpeg(input_path):
         print(f"Error processing '{input_path}': {e}")
         return input_path
 
-def process_and_plot_leads(ecg_df, img_id, file_name, result, top_label, class_name="6_2", mm_per_sec=25, mm_per_mV=10,
-                           signal_scale=0.01):
-    leads = ['I', 'II', 'III', 'aVR', 'aVL', 'aVF', 'V1', 'V2', 'V3', 'V4', 'V5', 'V6']
-    df = ecg_df
+# def process_and_plot_leads(ecg_df, img_id, file_name, result, top_label, class_name="6_2", mm_per_sec=25, mm_per_mV=10,
+#                            signal_scale=0.01):
+#     leads = ['I', 'II', 'III', 'aVR', 'aVL', 'aVF', 'V1', 'V2', 'V3', 'V4', 'V5', 'V6']
+#     df = ecg_df
 
-    # Define layouts
-    if class_name == "6_2":
-        lead_layout = [
-            ['I', 'V1'], ['II', 'V2'], ['III', 'V3'],
-            ['aVR', 'V4'], ['aVL', 'V5'], ['aVF', 'V6']
-        ]
-        rows, cols = 6, 2
-        sampling_rate = 200
-        fig_width_px, fig_height_px = 2800, 1770
-    elif class_name == "3_4":
-        lead_layout = [
-            ['I', 'aVR', 'V1', 'V4'],
-            ['II', 'aVL', 'V2', 'V5'],
-            ['III', 'aVF', 'V3', 'V6']
-        ]
-        rows, cols = 3, 4
-        sampling_rate = 300  #300
-        fig_width_px, fig_height_px = 3170, 1120
-    elif class_name == "12_1":
-        lead_layout = [[lead] for lead in leads]
-        rows, cols = 12, 1
-        sampling_rate = 325
-        fig_width_px, fig_height_px = 2495, 3545
-    else:
-        raise ValueError("Invalid layout. Use '6_2', '3_4','12_1'")
+#     # Define layouts
+#     if class_name == "6_2":
+#         lead_layout = [
+#             ['I', 'V1'], ['II', 'V2'], ['III', 'V3'],
+#             ['aVR', 'V4'], ['aVL', 'V5'], ['aVF', 'V6']
+#         ]
+#         rows, cols = 6, 2
+#         sampling_rate = 200
+#         fig_width_px, fig_height_px = 2800, 1770
+#     elif class_name == "3_4":
+#         lead_layout = [
+#             ['I', 'aVR', 'V1', 'V4'],
+#             ['II', 'aVL', 'V2', 'V5'],
+#             ['III', 'aVF', 'V3', 'V6']
+#         ]
+#         rows, cols = 3, 4
+#         sampling_rate = 300  #300
+#         fig_width_px, fig_height_px = 3170, 1120
+#     elif class_name == "12_1":
+#         lead_layout = [[lead] for lead in leads]
+#         rows, cols = 12, 1
+#         sampling_rate = 325
+#         fig_width_px, fig_height_px = 2495, 3545
+#     else:
+#         raise ValueError("Invalid layout. Use '6_2', '3_4','12_1'")
 
-    # If the top_label is 'avl', set up our remapping dict
-    if str(top_label).lower() == 'avl':
-        remap = {
-            'I': 'aVL',
-            'II': 'I',
-            'III': 'aVR',
-            'aVR': 'II',
-            'aVL': 'aVF',
-            'aVF': 'III'
+#     # If the top_label is 'avl', set up our remapping dict
+#     if str(top_label).lower() == 'avl':
+#         remap = {
+#             'I': 'aVL',
+#             'II': 'I',
+#             'III': 'aVR',
+#             'aVR': 'II',
+#             'aVL': 'aVF',
+#             'aVF': 'III'
 
-        }
-    else:
-        remap = {}
+#         }
+#     else:
+#         remap = {}
 
-    time_sec = np.arange(df.shape[0]) / sampling_rate
-    time_mm = time_sec * mm_per_sec
-    box_height_mm = 30
-    box_width_mm = time_mm[-1] + 10
-    fig_width_mm = box_width_mm * cols
-    grid_padding_mm = 20 if class_name == "3_4" else 0
-    fig_height_mm = box_height_mm * rows + grid_padding_mm
+#     time_sec = np.arange(df.shape[0]) / sampling_rate
+#     time_mm = time_sec * mm_per_sec
+#     box_height_mm = 30
+#     box_width_mm = time_mm[-1] + 10
+#     fig_width_mm = box_width_mm * cols
+#     grid_padding_mm = 20 if class_name == "3_4" else 0
+#     fig_height_mm = box_height_mm * rows + grid_padding_mm
 
-    dpi = 300
-    fig_width_in = fig_width_px / dpi
-    fig_height_in = fig_height_px / dpi
-    fig, ax = plt.subplots(figsize=(fig_width_in, fig_height_in), dpi=dpi)
+#     dpi = 300
+#     fig_width_in = fig_width_px / dpi
+#     fig_height_in = fig_height_px / dpi
+#     fig, ax = plt.subplots(figsize=(fig_width_in, fig_height_in), dpi=dpi)
 
-    def draw_ecg_grid(ax, width_mm, height_mm):
-        ax.set_xlim(0, width_mm)
-        ax.set_ylim(0, height_mm)
-        ax.set_aspect('equal')
-        ax.axis('off')
-        for x in np.arange(0, width_mm + 1, 1):
-            ax.axvline(x=x, color='#6096bd', linewidth=0.15)
-        for y in np.arange(0, height_mm + 1, 1):
-            ax.axhline(y=y, color='#6096bd', linewidth=0.15)
-        for x in np.arange(0, width_mm + 1, 5):
-            ax.axvline(x=x, color='#004b9e', linewidth=0.2)
-        for y in np.arange(0, height_mm + 1, 5):
-            ax.axhline(y=y, color='#004b9e', linewidth=0.2)
+#     def draw_ecg_grid(ax, width_mm, height_mm):
+#         ax.set_xlim(0, width_mm)
+#         ax.set_ylim(0, height_mm)
+#         ax.set_aspect('equal')
+#         ax.axis('off')
+#         for x in np.arange(0, width_mm + 1, 1):
+#             ax.axvline(x=x, color='#6096bd', linewidth=0.15)
+#         for y in np.arange(0, height_mm + 1, 1):
+#             ax.axhline(y=y, color='#6096bd', linewidth=0.15)
+#         for x in np.arange(0, width_mm + 1, 5):
+#             ax.axvline(x=x, color='#004b9e', linewidth=0.2)
+#         for y in np.arange(0, height_mm + 1, 5):
+#             ax.axhline(y=y, color='#004b9e', linewidth=0.2)
 
-    draw_ecg_grid(ax, fig_width_mm, fig_height_mm)
+#     draw_ecg_grid(ax, fig_width_mm, fig_height_mm)
 
-    # Extract label dictionary
-    label_dict, color_dict = {}, {}
-    for item in result.get('detections', []):
-        if 'detectType' not in item or 'detect' not in item:
-            continue
-        key, value = item['detectType'], item['detect']
-        label_dict[key] = f"{label_dict.get(key, '')}, {value}" if key in label_dict else value
+#     # Extract label dictionary
+#     label_dict, color_dict = {}, {}
+#     for item in result.get('detections', []):
+#         if 'detectType' not in item or 'detect' not in item:
+#             continue
+#         key, value = item['detectType'], item['detect']
+#         label_dict[key] = f"{label_dict.get(key, '')}, {value}" if key in label_dict else value
 
-    for r in range(rows):
-        for c in range(cols):
-            try:
-                lead = lead_layout[r][c]
-            except IndexError:
-                continue
+#     for r in range(rows):
+#         for c in range(cols):
+#             try:
+#                 lead = lead_layout[r][c]
+#             except IndexError:
+#                 continue
 
-            if lead not in df.columns:
-                continue
+#             if lead not in df.columns:
+#                 continue
 
-            raw = df[lead].values  
+#             raw = df[lead].values  
 
-            if class_name == '3_4':
-                amplitude_boost_boxes = 2
-                y_offset = fig_height_mm - grid_padding_mm / 3 - (r + 1) * box_height_mm
-            else:
-                amplitude_boost_boxes = 4
-                y_offset = fig_height_mm - grid_padding_mm / 2 - (r + 1) * box_height_mm
+#             if class_name == '3_4':
+#                 amplitude_boost_boxes = 2
+#                 y_offset = fig_height_mm - grid_padding_mm / 3 - (r + 1) * box_height_mm
+#             else:
+#                 amplitude_boost_boxes = 4
+#                 y_offset = fig_height_mm - grid_padding_mm / 2 - (r + 1) * box_height_mm
 
-            amplitude_boost_mm = amplitude_boost_boxes * 1
-            scale_factor = mm_per_mV + amplitude_boost_mm
+#             amplitude_boost_mm = amplitude_boost_boxes * 1
+#             scale_factor = mm_per_mV + amplitude_boost_mm
 
-            signal = (raw - np.mean(raw)) * signal_scale * scale_factor
+#             signal = (raw - np.mean(raw)) * signal_scale * scale_factor
 
-            if class_name == '3_4':
-                gap_mm = 2 
-                shift_left_mm = 3 
+#             if class_name == '3_4':
+#                 gap_mm = 2 
+#                 shift_left_mm = 3 
 
-                if c == 0:
-                    x_offset = c * box_width_mm - shift_left_mm 
-                elif c > 0:
-                    x_offset = c * box_width_mm + gap_mm
-                else:
-                    x_offset = c * box_width_mm
-            else:
-                x_offset = c * box_width_mm
-            signal_shift_mm = 10 if c == 0 else 0
+#                 if c == 0:
+#                     x_offset = c * box_width_mm - shift_left_mm 
+#                 elif c > 0:
+#                     x_offset = c * box_width_mm + gap_mm
+#                 else:
+#                     x_offset = c * box_width_mm
+#             else:
+#                 x_offset = c * box_width_mm
+#             signal_shift_mm = 10 if c == 0 else 0
 
-            x = time_mm + x_offset + signal_shift_mm
-            y = signal + y_offset + box_height_mm / 2
+#             x = time_mm + x_offset + signal_shift_mm
+#             y = signal + y_offset + box_height_mm / 2
 
-            # Plot ECG waveform
-            ax.plot(x, y, color='black', linewidth=0.7)
+#             # Plot ECG waveform
+#             ax.plot(x, y, color='black', linewidth=0.7)
 
-            arrhythmia_data = result.get(lead, {}).get('arrhythmia_data', {})
+#             arrhythmia_data = result.get(lead, {}).get('arrhythmia_data', {})
             
-            # Rhythm background coloring
-            rhythm_color = None
-            if lead in ['I', 'II', 'III', 'V1', 'V2', 'V5', 'V6']:
-                if 'BR' in label_dict.get('Arrhythmia', ''):
-                    rhythm_color = 'orangered'
-                    color_dict['BR'] = rhythm_color
-                elif 'TC' in label_dict.get('Arrhythmia', ''):
-                    rhythm_color = 'magenta'
-                    color_dict['TC'] = rhythm_color
-                elif any(x in label_dict.get('Arrhythmia', '') for x in
-                         ['I_Degree', 'III_Degree', 'MOBITZ_I', 'MOBITZ_II']):
-                    rhythm_color = 'blue'
-                    color_dict['block'] = rhythm_color
-                elif any(x in label_dict.get('Arrhythmia', '') for x in ['VFIB/Vflutter', 'ASYS']):
-                    rhythm_color = 'aqua'
-                    color_dict['VFIB_Asystole'] = rhythm_color
+#             # Rhythm background coloring
+#             rhythm_color = None
+#             if lead in ['I', 'II', 'III', 'V1', 'V2', 'V5', 'V6']:
+#                 if 'BR' in label_dict.get('Arrhythmia', ''):
+#                     rhythm_color = 'orangered'
+#                     color_dict['BR'] = rhythm_color
+#                 elif 'TC' in label_dict.get('Arrhythmia', ''):
+#                     rhythm_color = 'magenta'
+#                     color_dict['TC'] = rhythm_color
+#                 elif any(x in label_dict.get('Arrhythmia', '') for x in
+#                          ['I_Degree', 'III_Degree', 'MOBITZ_I', 'MOBITZ_II']):
+#                     rhythm_color = 'blue'
+#                     color_dict['block'] = rhythm_color
+#                 elif any(x in label_dict.get('Arrhythmia', '') for x in ['VFIB/Vflutter', 'ASYS']):
+#                     rhythm_color = 'aqua'
+#                     color_dict['VFIB_Asystole'] = rhythm_color
                     
-            if lead in ['II', 'III', 'aVF', 'I', 'aVL', 'V5','V6']:
-                if 'MI' in label_dict:
-                    rhythm_color = 'darkviolet'; color_dict['MI'] = rhythm_color
+#             if lead in ['II', 'III', 'aVF', 'I', 'aVL', 'V5','V6']:
+#                 if 'MI' in label_dict:
+#                     rhythm_color = 'darkviolet'; color_dict['MI'] = rhythm_color
                     
-            if rhythm_color:
-                ax.plot(x, y, color=rhythm_color, linewidth=0.8)
+#             if rhythm_color:
+#                 ax.plot(x, y, color=rhythm_color, linewidth=0.8)
 
-            lead_color = 'darkviolet' if lead in ['II', 'III', 'aVF', 'I', 'aVL', 'V5',
-                                            'V6'] and 'MI' in label_dict else 'black'
+#             lead_color = 'darkviolet' if lead in ['II', 'III', 'aVF', 'I', 'aVL', 'V5',
+#                                             'V6'] and 'MI' in label_dict else 'black'
             
-            print(label_dict['Arrhythmia'],"arrhythmias......")
-            pac_index, junc_index, pvc_index = [], [], []
-            if lead in ['II', 'III', 'aVF', 'V1', 'V2', 'V5', 'V6']:
-                if 'PAC' in label_dict['Arrhythmia']:
-                    pac_index = arrhythmia_data.get('PAC_DATA', {}).get('PAC_Index', [])
-                if 'Junctional' in label_dict['Arrhythmia']:
-                    junc_index = arrhythmia_data.get('PAC_DATA', {}).get('junc_index', [])
-                if 'PVC' in label_dict['Arrhythmia'] or 'NSVT' in label_dict['Arrhythmia']:
-                    pvc_index = arrhythmia_data.get('PVC_DATA', {}).get('PVC-Index', [])
+#             print(label_dict['Arrhythmia'],"arrhythmias......")
+#             pac_index, junc_index, pvc_index = [], [], []
+#             if lead in ['II', 'III', 'aVF', 'V1', 'V2', 'V5', 'V6']:
+#                 if 'PAC' in label_dict['Arrhythmia']:
+#                     pac_index = arrhythmia_data.get('PAC_DATA', {}).get('PAC_Index', [])
+#                 if 'Junctional' in label_dict['Arrhythmia']:
+#                     junc_index = arrhythmia_data.get('PAC_DATA', {}).get('junc_index', [])
+#                 if 'PVC' in label_dict['Arrhythmia'] or 'NSVT' in label_dict['Arrhythmia'] or "VT" in label_dict['Arrhythmia']:
+#                     pvc_index = arrhythmia_data.get('PVC_DATA', {}).get('PVC-Index', [])
 
-            # PAC
-            if pac_index:
-                color_dict['PAC'] = 'green'
-                for st, ed in pac_index:
-                    ax.plot(x[st:ed], y[st:ed], color='white', linewidth=5, alpha=0.3)
-                    ax.plot(x[st:ed], y[st:ed], color='green', linewidth=1, alpha=0.6)
+#             # PAC
+#             if pac_index:
+#                 color_dict['PAC'] = 'green'
+#                 for st, ed in pac_index:
+#                     ax.plot(x[st:ed], y[st:ed], color='white', linewidth=5, alpha=0.3)
+#                     ax.plot(x[st:ed], y[st:ed], color='green', linewidth=1, alpha=0.6)
 
-            # JUNCTIONAL
-            if junc_index:
-                color_dict['Junctional'] = 'brown'
-                for st, ed in junc_index:
-                    ax.plot(x[st:ed], y[st:ed], color='white', linewidth=5, alpha=0.3)
-                    ax.plot(x[st:ed], y[st:ed], color='brown', linewidth=1, alpha=0.6)
+#             # JUNCTIONAL
+#             if junc_index:
+#                 color_dict['Junctional'] = 'brown'
+#                 for st, ed in junc_index:
+#                     ax.plot(x[st:ed], y[st:ed], color='white', linewidth=5, alpha=0.3)
+#                     ax.plot(x[st:ed], y[st:ed], color='brown', linewidth=1, alpha=0.6)
 
-            # PVC
-            if pvc_index:
-                color_dict['PVC'] = 'red'
-                for idx in pvc_index:
-                    st = max(idx - 20, 0)
-                    ed = min(idx + 50, len(x))
-                    ax.plot(x[st:ed], y[st:ed], color='white', linewidth=5, alpha=0.3)
-                    ax.plot(x[st:ed], y[st:ed], color='red', linewidth=1, alpha=0.6)
+#             # PVC
+#             if pvc_index:
+#                 color_dict['PVC'] = 'red'
+#                 for idx in pvc_index:
+#                     st = max(idx - 20, 0)
+#                     ed = min(idx + 50, len(x))
+#                     ax.plot(x[st:ed], y[st:ed], color='white', linewidth=5, alpha=0.3)
+#                     ax.plot(x[st:ed], y[st:ed], color='red', linewidth=1, alpha=0.6)
 
             
-            display_label = remap.get(lead, lead)
+#             display_label = remap.get(lead, lead)
 
-            label_shift_right_mm = 5
+#             label_shift_right_mm = 5
 
-            if c == 0:
-                label_x = x_offset + 3 + label_shift_right_mm
-                label_align = 'left'
-            else:
-                label_x = x_offset + time_mm[0] - 3
-                label_align = 'right'
+#             if c == 0:
+#                 label_x = x_offset + 3 + label_shift_right_mm
+#                 label_align = 'left'
+#             else:
+#                 label_x = x_offset + time_mm[0] - 3
+#                 label_align = 'right'
 
-            ax.text(label_x, np.median(y) + 5, display_label, fontsize=7,
-                    verticalalignment='center', horizontalalignment=label_align,
-                    fontweight='bold', color=lead_color)
+#             ax.text(label_x, np.median(y) + 5, display_label, fontsize=7,
+#                     verticalalignment='center', horizontalalignment=label_align,
+#                     fontweight='bold', color=lead_color)
                     
-            layout_label_map = {
-                "6_2": "6X2",
-                "3_4": "3X4",
-                "12_1": "12X1"
-            }
-            ecg_type_label = layout_label_map.get(class_name, "Unknown")
+#             layout_label_map = {
+#                 "6_2": "6X2",
+#                 "3_4": "3X4",
+#                 "12_1": "12X1"
+#             }
+#             ecg_type_label = layout_label_map.get(class_name, "Unknown")
 
             
-            ax.text(
-            fig_width_mm / 3,
-            1,
-            f"Ecg_Type = {ecg_type_label}, {25}mm/s, {10}mm/mV",
-            fontsize=5,
-            color="black",
-            ha="left",
-            va="bottom")
+#             ax.text(
+#             fig_width_mm / 3,
+#             1,
+#             f"Ecg_Type = {ecg_type_label}, {25}mm/s, {10}mm/mV",
+#             fontsize=5,
+#             color="black",
+#             ha="left",
+#             va="bottom")
 
-    result['color_dict'] = color_dict
-    fig.savefig(f"Result/{file_name}_{img_id}.jpg", bbox_inches='tight', pad_inches=0.1, dpi=dpi)
-    plt.close()
-    return result
+#     result['color_dict'] = color_dict
+#     fig.savefig(f"Result/{file_name}_{img_id}.jpg", bbox_inches='tight', pad_inches=0.1, dpi=dpi)
+#     plt.close()
+#     return result
 
 
 def setup_ecg_subplot(fig):
@@ -5253,7 +5258,7 @@ def img_signle_extraction(crop_imgs_path, class_name, orig_height=None, orig_wid
             extractor = SignalExtractor_3_4(n=6)
             ecg_image = binary
         else:
-            extractor =  SignalExtractor_3_4(n=7)
+            extractor =  SignalExtractor_3_4(n=6)
             ecg_image = binary
 
         signals = extractor.extract_signals_3_4(ecg_image)
@@ -5523,7 +5528,8 @@ def image_crop_and_save(image_path, class_name, output_folder):
                 (114.3, 114.5),
                 (78.1, 78.5),
                 (142.7, 143.2),
-                (110.4, 110.8)
+                (110.4, 110.8),
+                (243, 243.5)
             ]
     
 
@@ -6236,7 +6242,7 @@ def plot_and_save_ecg_pixel_based(df, file_name, img_id, layout='3x4', top_label
                 pac_index = arrhythmia_data.get('PAC_DATA', {}).get('PAC_Index', [])
             if 'Junctional' in label_dict['Arrhythmia']:
                 junc_index = arrhythmia_data.get('PAC_DATA', {}).get('junc_index', [])
-            if 'PVC' in label_dict['Arrhythmia'] or 'NSVT' in label_dict['Arrhythmia']:
+            if 'PVC' in label_dict['Arrhythmia'] or 'NSVT' in label_dict['Arrhythmia'] or "VT" in label_dict['Arrhythmia'] or "IVR" in label_dict['Arrhythmia']:
                 pvc_index = arrhythmia_data.get('PVC_DATA', {}).get('PVC-Index', [])
 
             # PAC
@@ -7121,7 +7127,7 @@ if __name__ == '__main__':
         block_model = load_tflite_model("Model/Block_Trans_mob_lightweight_v2_optimized.tflite")
         noise_model = load_tflite_model('Model/NOISE_20_GPT.tflite')
         let_inf_moedel = load_tflite_model("Model/MI_21_11_25_oea.tflite")
-        r_index_model = load_tflite_model("Model/rnn_model1_01_12_Unet_oea.tflite")
+        r_index_model = load_tflite_model("Model/rnn_model1_09_12_Unet_oea.tflite")
         pt_index_model = load_tflite_model("Model/ecg_pt_detection_LSTMGRU_v32.tflite")
 
         BACKBONE = "resnet34"
