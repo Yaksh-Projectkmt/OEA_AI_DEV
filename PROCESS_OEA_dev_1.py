@@ -81,7 +81,7 @@ def load_tflite_model(model_path):
     return interpreter, input_details, output_details
 
 
-img_interpreter, img_input_details, img_output_details = load_tflite_model("Model/restingecgModel_autoGrid_28.tflite")
+img_interpreter, img_input_details, img_output_details = load_tflite_model("Model/restingecgModel_autoGrid_30.tflite")
 
 # For grid in lead detection
 Lead_list = ["I", "II", "III", "V1", "V2", "V3", "V4", "V5", "V6", "aVF", "aVL", "aVR"]
@@ -3860,7 +3860,9 @@ def hr_count(r_index, class_name='6_2'):
         cal_sec = 2.5
     if cal_sec != 0:
         hr = round(r_index.shape[0] * 60 / cal_sec)
+        print(hr, "=====hr")
         return hr
+        
     return 0
 
 
@@ -5258,7 +5260,7 @@ def img_signle_extraction(crop_imgs_path, class_name, orig_height=None, orig_wid
             extractor = SignalExtractor_3_4(n=6)
             ecg_image = binary
         else:
-            extractor =  SignalExtractor_3_4(n=6)
+            extractor =  SignalExtractor_3_4(n=7)
             ecg_image = binary
 
         signals = extractor.extract_signals_3_4(ecg_image)
@@ -5507,11 +5509,11 @@ def image_crop_and_save(image_path, class_name, output_folder):
             )
 
             center_ranges = [
-                (39, 39.4), (47, 48), (59, 59.5), (62, 63), (84.10, 85), (96, 98),
+                (39, 39.4), (47, 48), (59, 59.5), (62.2, 63), (84.10, 85), (96, 98),
                 (109, 110), (112, 113), (130, 131), (137, 138),
                 (147, 147.5), (154, 156), (165, 169), (178, 180),
                 (192, 193), (219, 220), (222, 223), (225, 226),
-                (229, 230), (236, 237), (413, 414),
+                (229, 230),(230.8, 231), (236, 237),(257.1, 257.2), (413, 414),
     
                 # Newly added precise ranges
                 (96.4, 96.6),
@@ -5815,20 +5817,74 @@ def plot_and_save_ecg_pixel_based(df, file_name, img_id, layout='3x4', top_label
         
         return final_spacing
 
-    def plot_runs(ax, xv, yv, col, y_jump_thresh=100, lw=1.5):
+    def plot_runs(ax, xv, yv, col, y_jump_thresh=100, lw=1.5,keep_main_frac=0.6, y_center_tol=None):
+
         xv = np.asarray(xv, dtype=float)
         yv = np.asarray(yv, dtype=float)
         if xv.size == 0:
             return
-        
-        # Break if X jumps OR Y jumps significantly
-        brk_x = np.where(np.diff(xv) > 1.5)[0]
+
+        # Optional: drop non-finite y (to avoid NaN diff issues)
+        finite_mask = np.isfinite(yv)
+        if not finite_mask.any():
+            return
+        xv = xv[finite_mask]
+        yv = yv[finite_mask]
+        if xv.size < 2:
+            return
+
+        # --- 1) Compute scale-aware X jump threshold ---
+        dx = np.diff(xv)
+        # typical step (ignore zeros/negatives just in case)
+        pos_dx = dx[dx > 0]
+        if pos_dx.size == 0:
+            typical_step = 1.0
+        else:
+            typical_step = np.median(pos_dx)
+
+        # treat as a break only if the gap is much bigger than normal step
+        x_jump_thresh = 1.5 * typical_step   # you can tweak factor if needed
+
+        # 2) Find break indices (X or Y jumps)
+        brk_x = np.where(dx > x_jump_thresh)[0]
         brk_y = np.where(np.abs(np.diff(yv)) > y_jump_thresh)[0]
         brk = np.unique(np.r_[brk_x, brk_y])
-    
-        starts = np.r_[0, brk+1]
-        ends   = np.r_[brk, len(xv)-1]
-        for s, e in zip(starts, ends):
+
+        starts = np.r_[0, brk + 1]
+        ends   = np.r_[brk, len(xv) - 1]
+
+        if starts.size == 0:
+            return
+
+        seg_lens = ends - starts + 1
+        max_len_idx = np.argmax(seg_lens)
+        max_len = seg_lens[max_len_idx]
+
+        # Main (longest) segment → defines main Y-level
+        main_s, main_e = starts[max_len_idx], ends[max_len_idx]
+        main_center_y = np.median(yv[main_s:main_e+1])
+
+        # If no tolerance given, derive from y_jump_thresh
+        if y_center_tol is None:
+            y_center_tol = 0.3 * y_jump_thresh  # tweak if needed
+
+        min_keep_len = int(np.ceil(keep_main_frac * max_len))
+
+        # 3) Decide for each segment: keep or discard
+        for s, e, seg_len in zip(starts, ends, seg_lens):
+            if seg_len <= 1:
+                continue
+
+            seg_center_y = np.median(yv[s:e+1])
+
+            is_long_enough = seg_len >= min_keep_len
+            is_y_aligned   = abs(seg_center_y - main_center_y) <= y_center_tol
+
+            if not (is_long_enough or is_y_aligned):
+                # Too short AND far in Y from main → treat as noise
+                continue
+
+            # 4) Plot accepted segments
             ax.plot(xv[s:e+1], yv[s:e+1], color=col, lw=lw)
 
     def reconstruct_grid(img, show=False):
@@ -6221,8 +6277,8 @@ def plot_and_save_ecg_pixel_based(df, file_name, img_id, layout='3x4', top_label
                          ['I_Degree', 'III_Degree', 'MOBITZ_I', 'MOBITZ_II']):
                     rhythm_color = 'blue'
                     color_dict['block'] = rhythm_color
-                elif any(x in label_dict.get('Arrhythmia', '') for x in ['VFIB/Vflutter', 'ASYS']):
-                    rhythm_color = 'aqua'
+                elif any(x in label_dict.get('Arrhythmia', '') for x in ['VFIB/Vflutter', 'ASYS','AFIB']):
+                    rhythm_color = 'brown'
                     color_dict['VFIB_Asystole'] = rhythm_color
 
             if lead in ['II', 'III', 'aVF', 'I', 'aVL', 'V5', 'V6']:
@@ -6262,7 +6318,7 @@ def plot_and_save_ecg_pixel_based(df, file_name, img_id, layout='3x4', top_label
 
             # JUNCTIONAL
             if junc_index:
-                color_dict['Junctional'] = 'brown'
+                color_dict['Junctional'] = 'aqua'
                 for st, ed in junc_index:
                     new_st = st - new_diff
                     if new_st < 0:
@@ -6934,7 +6990,8 @@ def get_mapping_keys_for_detection(detect_value):
 
     return matched_keys
 
-def insert_ecg_result_to_db(data, ecg_df, db_url="mongodb://192.168.1.65:27017/"):
+#def insert_ecg_result_to_db(data, ecg_df, db_url="mongodb://192.168.1.65:27017/"):
+def insert_ecg_result_to_db(data, ecg_df, db_url="mongodb://admin:OomKmt2025@191.169.1.43:27017/?authSource=admin"):
     try:
         client = MongoClient(db_url)
 
