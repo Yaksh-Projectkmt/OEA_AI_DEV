@@ -7940,6 +7940,25 @@ def plot_and_save_ecg_pixel_based_other(df, file_name, img_id, layout='3x4', top
     w, h = fig.get_size_inches()
     fig.set_size_inches(w * 1.5, h * 1.5)
     w, h = fig.get_size_inches()
+
+   
+    x_min, x_max = ax.get_xlim()
+    y_min, y_max = ax.get_ylim()
+    
+    ax.text(
+        x_max - 0.2,        # grid-relative padding
+        y_min + 0.2,
+        r"$\mathrm{Digitization}\ \mathrm{by}\ \mathbf{OOM}$",
+        ha="right",
+        va="bottom",
+        fontsize=11 * 1.5,
+        color="#444444",
+        alpha=0.85,
+        zorder=10
+    )
+
+    
+
     plt.savefig(f"Result/{file_name}_{img_id}.jpg", bbox_inches='tight', pad_inches=0.1, dpi=100)
     plt.close()
 
